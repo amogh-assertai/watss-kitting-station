@@ -1,0 +1,432 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold"><i class="fas fa-tasks"></i> Kitting Activities</h2>
+        <p class="text-muted">Monitor and manage live kitting stations.</p>
+    </div>
+    
+    <button class="btn btn-success btn-lg" data-bs-toggle="modal" data-bs-target="#newActivityModal">
+        <i class="fas fa-plus-circle"></i> Create New Kitting Activity
+    </button>
+</div>
+
+<div class="row">
+    <div class="col-12 text-center py-5 text-muted bg-white border rounded shadow-sm">
+        <i class="fas fa-industry fa-3x mb-3"></i>
+        <h4>Current Activities Dashboard</h4>
+        <p>Live status of tables will appear here.</p>
+    </div>
+</div>
+
+<div class="modal fade" id="newActivityModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title" id="modalTitle"><i class="fas fa-play"></i> Start New Activity</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            
+            <div class="modal-body">
+                <div id="validationAlert" class="alert alert-danger d-none" role="alert"></div>
+
+                <div id="step1-container">
+                    <form id="step1Form">
+                        <div class="d-grid gap-3">
+                            <div class="col-12">
+                                <label class="form-label fw-bold">Select Station</label>
+                                <select class="form-select" id="tableId" required>
+                                    <option value="" disabled>Choose Table...</option>
+                                    <option value="1" selected>Table 1</option>
+                                    <option value="2">Table 2</option>
+                                    <option value="3">Table 3</option>
+                                    <option value="4">Table 4</option>
+                                    <option value="5">Table 5</option>
+                                </select>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label fw-bold">Order Number</label>
+                                <input type="text" class="form-control" id="orderNumber" placeholder="e.g. ORD-2025-001" required>
+                            </div>
+                            <hr class="my-1">
+                            <div class="col-12">
+                                <label class="form-label fw-bold">Kit Name</label>
+                                <input type="text" class="form-control" id="kitName" placeholder="Enter Kit Name" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label fw-bold">EDP Number</label>
+                                <input type="text" class="form-control" id="edpNumber" placeholder="Enter EDP Number" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label fw-bold">Units to Pack</label>
+                                <input type="number" class="form-control" id="packUnits" min="1" value="1" required>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+
+                <div id="step2-container" class="d-none text-center py-4">
+                    <div id="ai-spinner">
+                        <div class="spinner-border text-primary mb-3" role="status"></div>
+                        <h5>Contacting AI Station...</h5>
+                        <p class="text-muted">Waiting for handshake from <span class="fw-bold">Table <span id="displayTableId"></span></span>...</p>
+                        <small class="text-muted">Timeout in <span id="timer-count">30</span>s</small>
+                    </div>
+                    
+                    <div id="ai-success" class="d-none">
+                        <i class="fas fa-check-circle text-success fa-4x mb-3"></i>
+                        <h4 class="text-success">AI Ready!</h4>
+                        <p>The AI station has confirmed it is starting.</p>
+                    </div>
+
+                    <div id="ai-timeout" class="d-none">
+                        <i class="fas fa-exclamation-triangle text-danger fa-4x mb-3"></i>
+                        <h4 class="text-danger">AI Not Responding</h4>
+                        <p class="mb-3">The AI Server did not reply within 30 seconds.</p>
+                        <div class="alert alert-warning text-start d-inline-block p-2">
+                            <small>
+                                <strong>Troubleshooting:</strong><br>
+                                1. Check if the AI Script is running on the station.<br>
+                                2. Ensure the AI is connected to the same network.<br>
+                                3. Restart the AI Server and try again.
+                            </small>
+                        </div>
+                        <div class="mt-3">
+                            <button class="btn btn-outline-danger btn-sm" onclick="retryHandshake()">
+                                <i class="fas fa-redo"></i> Retry Connection
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="camera-container" class="d-none text-center py-2">
+                    <h5 id="cam-title" class="mb-3 fw-bold">Configuring Camera</h5>
+                    
+                    <div id="cam-loading">
+                        <div class="spinner-grow text-primary mb-3"></div>
+                        <p id="cam-status-text" class="fw-bold">Requesting Capture...</p>
+                        <small class="text-muted">Timeout in <span id="cam-timer">60</span>s</small>
+                    </div>
+
+                    <div id="cam-result" class="d-none">
+                        <img id="cam-image" src="" class="img-fluid border rounded mb-3 bg-light shadow-sm" style="max-height: 250px; min-height: 150px; width: 100%; object-fit: contain;">
+                        <div class="alert alert-success py-2 mb-0"><i class="fas fa-check me-2"></i> Captured Successfully</div>
+                    </div>
+
+                    <div id="cam-error" class="d-none">
+                        <i class="fas fa-exclamation-circle text-danger fa-3x mb-3"></i>
+                        <h5 class="text-danger">Capture Failed</h5>
+                        <p id="cam-error-msg">No image received.</p>
+                        <button class="btn btn-outline-danger btn-sm" onclick="retryCurrentCamera()">
+                            <i class="fas fa-redo me-1"></i> Retry Capture
+                        </button>
+                    </div>
+                </div>
+
+                <div id="final-container" class="d-none text-center py-4">
+                     <i class="fas fa-clipboard-check text-success fa-4x mb-3"></i>
+                     <h4 class="text-success">All Systems Go</h4>
+                     <p>Cameras configured. AI connection stable.</p>
+                     <p class="text-muted">Ready to begin operations on Table <span id="finalTableId"></span>.</p>
+                </div>
+            </div>
+
+            <div class="modal-footer bg-light">
+                <div id="step1-btns" class="w-100 d-flex justify-content-end gap-2">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary px-4" onclick="validateAndProceed()">
+                        Next <i class="fas fa-arrow-right ms-2"></i>
+                    </button>
+                </div>
+
+                <div id="step2-btns" class="w-100 d-flex justify-content-between d-none">
+                    <button type="button" class="btn btn-outline-secondary" onclick="goBackToStep1()">
+                        <i class="fas fa-arrow-left ms-2"></i> Back
+                    </button>
+                    <button type="button" class="btn btn-success px-4" id="handshakeNextBtn" disabled onclick="startCameraSequence(1)">
+                        Proceed to Camera Setup <i class="fas fa-arrow-right ms-2"></i>
+                    </button>
+                </div>
+
+                 <div id="camera-btns" class="w-100 d-flex justify-content-end d-none">
+                    <button class="btn btn-primary px-4" id="camNextBtn" disabled onclick="nextCameraStep()">
+                        Confirm & Next <i class="fas fa-arrow-right ms-2"></i>
+                    </button>
+                </div>
+                
+                 <div id="final-btns" class="w-100 d-flex justify-content-end d-none">
+                     <button class="btn btn-success btn-lg w-100" onclick="alert('Starting Kitting Logic... (Functionality Coming Soon)')">
+                        <i class="fas fa-play me-2"></i> Start Kitting Job
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+<script>
+    console.log("Attempting to connect to Socket Server at:", SOCKET_URL);
+    
+    // Force WebSocket transport for reliability
+    const socket = io(SOCKET_URL, {
+        transports: ['websocket'],
+        upgrade: false
+    });
+
+    let currentTableId = null;
+    let handshakeTimer = null;
+    let countdownInterval = null;
+    
+    // New variables for Camera Logic
+    let currentCamStep = 0; // 1 = Cam1, 2 = Cam2
+    let camTimer = null;
+    let camInterval = null;
+
+    // --- CONNECTION DEBUG ---
+    socket.on('connect', () => {
+        console.log("✅ UI Socket Connected! ID:", socket.id);
+    });
+    socket.on('connect_error', (err) => {
+        console.error("❌ UI Socket Connection Error:", err);
+    });
+
+    // --- SOCKET LISTENERS ---
+
+    // 1. Handshake Listener
+    socket.on('ai_handshake_response', (data) => {
+        console.log("📩 AI Responded:", data);
+        if (data.message === 'starting-ai-application' && String(data.tableId) === String(currentTableId)) {
+            // Success
+            clearTimeout(handshakeTimer);
+            clearInterval(countdownInterval);
+            
+            document.getElementById('ai-spinner').classList.add('d-none');
+            document.getElementById('ai-timeout').classList.add('d-none');
+            document.getElementById('ai-success').classList.remove('d-none');
+            document.getElementById('handshakeNextBtn').disabled = false;
+        }
+    });
+
+    // 2. Camera 1 Listeners
+    socket.on('sending_cam1_ack', (data) => {
+        if(String(data.tableId) === String(currentTableId)) updateCamStatus("AI is capturing image...");
+    });
+    socket.on('cam1_result', (data) => handleCamResult(1, data));
+
+    // 3. Camera 2 Listeners
+    socket.on('sending_cam2_ack', (data) => {
+        if(String(data.tableId) === String(currentTableId)) updateCamStatus("AI is capturing image...");
+    });
+    socket.on('cam2_result', (data) => handleCamResult(2, data));
+
+
+    // --- STEP 1: VALIDATION ---
+    async function validateAndProceed() {
+        const alertBox = document.getElementById('validationAlert');
+        alertBox.classList.add('d-none');
+        alertBox.innerText = "";
+        
+        currentTableId = document.getElementById('tableId').value;
+        const payload = {
+            table_id: currentTableId,
+            order_number: document.getElementById('orderNumber').value,
+            kit_name: document.getElementById('kitName').value,
+            edp_number: document.getElementById('edpNumber').value,
+            units: document.getElementById('packUnits').value
+        };
+
+        if (!payload.table_id || !payload.order_number || !payload.kit_name || !payload.edp_number || !payload.units) {
+            alertBox.innerText = "Please fill in all fields.";
+            alertBox.classList.remove('d-none');
+            return;
+        }
+
+        const btn = document.querySelector('#step1-btns .btn-primary');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Validating...';
+        btn.disabled = true;
+
+        try {
+            const response = await fetch("{{ url_for('kitting.validate_step1') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                switchView('step2');
+                initiateHandshake();
+            } else {
+                alertBox.innerText = result.message;
+                alertBox.classList.remove('d-none');
+            }
+        } catch (error) {
+            console.error(error);
+            alertBox.innerText = "Server Error: Could not validate request.";
+            alertBox.classList.remove('d-none');
+        } finally {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    }
+
+    // --- STEP 2: HANDSHAKE LOGIC ---
+    function initiateHandshake() {
+        console.log(`➡️ UI Joining Room: table_${currentTableId}`);
+        socket.emit('join_table', { table_id: currentTableId });
+
+        const signalData = {
+            message: "creating-new-activity",
+            dateTime: new Date().toISOString(),
+            tableId: currentTableId
+        };
+        console.log("➡️ UI Emitting to AI:", signalData);
+        socket.emit('create_activity_signal', signalData);
+
+        startTimeoutTimer();
+    }
+
+    function startTimeoutTimer() {
+        let timeLeft = 30;
+        document.getElementById('timer-count').innerText = timeLeft;
+        if (countdownInterval) clearInterval(countdownInterval);
+        
+        countdownInterval = setInterval(() => {
+            timeLeft--;
+            if (timeLeft >= 0) document.getElementById('timer-count').innerText = timeLeft;
+        }, 1000);
+
+        if (handshakeTimer) clearTimeout(handshakeTimer);
+        handshakeTimer = setTimeout(() => {
+            clearInterval(countdownInterval);
+            document.getElementById('ai-spinner').classList.add('d-none');
+            document.getElementById('ai-success').classList.add('d-none');
+            document.getElementById('ai-timeout').classList.remove('d-none');
+        }, 30000);
+    }
+
+    function retryHandshake() {
+        document.getElementById('ai-timeout').classList.add('d-none');
+        document.getElementById('ai-spinner').classList.remove('d-none');
+        initiateHandshake();
+    }
+
+
+    // --- STEP 3 & 4: CAMERA LOGIC ---
+
+    function startCameraSequence(camNum) {
+        currentCamStep = camNum;
+        switchView('camera');
+        
+        // Reset Camera UI elements
+        document.getElementById('cam-title').innerText = `Setup Camera ${camNum}`;
+        document.getElementById('cam-loading').classList.remove('d-none');
+        document.getElementById('cam-result').classList.add('d-none');
+        document.getElementById('cam-error').classList.add('d-none');
+        document.getElementById('camNextBtn').disabled = true;
+        updateCamStatus("Requesting Capture...");
+
+        // Start 60s Timer for Camera
+        startCamTimer();
+
+        // Emit Request to AI
+        const eventName = `capture_cam${camNum}_signal`;
+        console.log(`📸 Requesting Cam ${camNum}...`);
+        socket.emit(eventName, { 
+            message: `capture-cam${camNum}-image`,
+            tableId: currentTableId
+        });
+    }
+
+    function updateCamStatus(text) {
+        document.getElementById('cam-status-text').innerText = text;
+    }
+
+    function handleCamResult(camNum, data) {
+        console.log(`📸 Cam ${camNum} Result:`, data);
+        if(String(data.tableId) !== String(currentTableId)) return;
+        
+        // Stop Timer
+        clearInterval(camInterval);
+        clearTimeout(camTimer);
+
+        document.getElementById('cam-loading').classList.add('d-none');
+
+        if(data.status === 'success') {
+            document.getElementById('cam-result').classList.remove('d-none');
+            // Cache busting to ensure we see the fresh image
+            document.getElementById('cam-image').src = data.imageUrl + "?t=" + new Date().getTime();
+            document.getElementById('camNextBtn').disabled = false;
+        } else {
+            document.getElementById('cam-error').classList.remove('d-none');
+            document.getElementById('cam-error-msg').innerText = data.error || "Unknown error";
+        }
+    }
+
+    function startCamTimer() {
+        let timeLeft = 60;
+        document.getElementById('cam-timer').innerText = timeLeft;
+        if(camInterval) clearInterval(camInterval);
+        if(camTimer) clearTimeout(camTimer);
+
+        camInterval = setInterval(() => {
+            timeLeft--;
+            if(timeLeft >= 0) document.getElementById('cam-timer').innerText = timeLeft;
+        }, 1000);
+
+        camTimer = setTimeout(() => {
+            clearInterval(camInterval);
+            document.getElementById('cam-loading').classList.add('d-none');
+            document.getElementById('cam-error').classList.remove('d-none');
+            document.getElementById('cam-error-msg').innerText = "Timeout: AI did not send image.";
+        }, 60000);
+    }
+
+    function nextCameraStep() {
+        if(currentCamStep === 1) {
+            startCameraSequence(2); // Go to Cam 2
+        } else {
+            switchView('final'); // Done
+        }
+    }
+
+    function retryCurrentCamera() {
+        startCameraSequence(currentCamStep);
+    }
+
+    // --- VIEW SWITCHER HELPER ---
+    function switchView(viewName) {
+        // Hide all containers
+        const views = ['step1', 'step2', 'camera', 'final'];
+        views.forEach(v => {
+            const container = document.getElementById(`${v}-container`);
+            const btns = document.getElementById(`${v}-btns`);
+            
+            if(container) container.classList.add('d-none');
+            if(btns) btns.classList.add('d-none');
+        });
+
+        // Show specific view
+        const targetContainer = document.getElementById(`${viewName}-container`);
+        const targetBtns = document.getElementById(`${viewName}-btns`);
+        
+        if(targetContainer) targetContainer.classList.remove('d-none');
+        if(targetBtns) targetBtns.classList.remove('d-none');
+
+        // Special handling for Final View
+        if(viewName === 'final') {
+            document.getElementById('modalTitle').innerText = "Ready to Start";
+            document.getElementById('finalTableId').innerText = currentTableId;
+        }
+    }
+
+    function goBackToStep1() {
+        clearTimeout(handshakeTimer);
+        clearInterval(countdownInterval);
+        switchView('step1');
+    }
+</script>
+{% endblock %}

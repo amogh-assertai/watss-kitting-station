@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container pb-5">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>
+            <i class="fas fa-cogs"></i> {{ 'Edit Kit' if kit else 'Create New Kit' }}
+        </h2>
+        <a href="{{ url_for('parts.list_kits') }}" class="btn btn-outline-secondary">Back to List</a>
+    </div>
+
+    <input type="hidden" id="kit_id" value="{{ kit.id if kit else '' }}">
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light fw-bold">1. Kit Details</div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Kit Name</label>
+                    <input type="text" class="form-control" id="kit_name" value="{{ kit.kit_name if kit else '' }}" placeholder="e.g. Engine Assembly Kit A">
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">EDP Number</label>
+                    <input type="text" class="form-control" id="edp_number" value="{{ kit.edp_number if kit else '' }}" placeholder="e.g. EDP-998877">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+            <span class="fw-bold">2. Parts Configuration</span>
+            <button type="button" class="btn btn-sm btn-success" onclick="addPartRow()">
+                <i class="fas fa-plus"></i> Add Part
+            </button>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-bordered mb-0" id="partsTable">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 25%">Part Name</th>
+                        <th style="width: 15%">Qty</th>
+                        <th style="width: 15%">Camera</th>
+                        <th style="width: 35%">Alert Config</th>
+                        <th style="width: 10%">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="partsBody">
+                    </tbody>
+            </table>
+            
+            <div id="emptyState" class="text-center py-4 text-muted">
+                No parts added yet. Click "Add Part" to begin.
+            </div>
+        </div>
+    </div>
+
+    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+        <button type="button" class="btn btn-primary btn-lg px-5" onclick="submitKit()">
+            <i class="fas fa-save"></i> Save Kit Configuration
+        </button>
+    </div>
+</div>
+
+<script>
+    // Load existing parts if editing
+    const existingParts = {{ kit.parts | tojson if kit and kit.parts else '[]' | safe }};
+
+    document.addEventListener('DOMContentLoaded', () => {
+        if (existingParts.length > 0) {
+            existingParts.forEach(part => addPartRow(part));
+        }
+    });
+
+    function addPartRow(data = null) {
+        document.getElementById('emptyState').style.display = 'none';
+        const tbody = document.getElementById('partsBody');
+        const rowId = Date.now(); // Unique ID for checkbox grouping
+
+        const row = document.createElement('tr');
+        
+        // Default values
+        const name = data ? data.name : '';
+        const qty = data ? data.quantity : 1;
+        const cam = data ? data.camera : 'cam1';
+        const alerts = data ? data.alerts : [];
+
+        row.innerHTML = `
+            <td>
+                <input type="text" class="form-control part-name" placeholder="Part Name" value="${name}">
+            </td>
+            <td>
+                <input type="number" class="form-control part-qty" min="1" value="${qty}">
+            </td>
+            <td>
+                <select class="form-select part-cam">
+                    <option value="cam1" ${cam === 'cam1' ? 'selected' : ''}>Camera 1</option>
+                    <option value="cam2" ${cam === 'cam2' ? 'selected' : ''}>Camera 2</option>
+                </select>
+            </td>
+            <td>
+                <div class="d-flex flex-column gap-1">
+                    <div class="form-check">
+                        <input class="form-check-input part-alert" type="checkbox" value="missing" id="miss_${rowId}" ${alerts.includes('missing') ? 'checked' : ''}>
+                        <label class="form-check-label text-danger" for="miss_${rowId}">Alert if Missing</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input part-alert" type="checkbox" value="undercount" id="under_${rowId}" ${alerts.includes('undercount') ? 'checked' : ''}>
+                        <label class="form-check-label text-warning" for="under_${rowId}">Alert if Undercount</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input part-alert" type="checkbox" value="overcount" id="over_${rowId}" ${alerts.includes('overcount') ? 'checked' : ''}>
+                        <label class="form-check-label text-info" for="over_${rowId}">Alert if Overcount</label>
+                    </div>
+                </div>
+            </td>
+            <td class="text-center align-middle">
+                <button class="btn btn-outline-danger btn-sm" onclick="removeRow(this)">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        `;
+        tbody.appendChild(row);
+    }
+
+    function removeRow(btn) {
+        btn.closest('tr').remove();
+        if(document.getElementById('partsBody').children.length === 0) {
+            document.getElementById('emptyState').style.display = 'block';
+        }
+    }
+
+    async function submitKit() {
+        // 1. Gather Basic Info
+        const kitId = document.getElementById('kit_id').value;
+        const kitName = document.getElementById('kit_name').value;
+        const edpNumber = document.getElementById('edp_number').value;
+
+        if(!kitName || !edpNumber) {
+            alert("Please fill in Kit Name and EDP Number");
+            return;
+        }
+
+        // 2. Gather Parts Data
+        const rows = document.querySelectorAll('#partsBody tr');
+        let parts = [];
+        
+        for (let row of rows) {
+            const name = row.querySelector('.part-name').value;
+            const qty = row.querySelector('.part-qty').value;
+            const cam = row.querySelector('.part-cam').value;
+            
+            // Get checked alerts
+            const alertChecks = row.querySelectorAll('.part-alert:checked');
+            let alerts = Array.from(alertChecks).map(cb => cb.value);
+
+            if(!name) {
+                alert("All parts must have a name.");
+                return;
+            }
+
+            parts.push({
+                name: name,
+                quantity: parseInt(qty),
+                camera: cam,
+                alerts: alerts
+            });
+        }
+
+        // 3. Send to Server
+        const payload = {
+            kit_id: kitId,
+            kit_name: kitName,
+            edp_number: edpNumber,
+            parts: parts
+        };
+
+        try {
+            const response = await fetch("{{ url_for('parts.save_kit') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            const result = await response.json();
+            
+            if (result.status === 'success') {
+                window.location.href = result.redirect;
+            } else {
+                alert("Error: " + result.message);
+            }
+        } catch (error) {
+            console.error("Error:", error);
+            alert("An unexpected error occurred.");
+        }
+    }
+</script>
+{% endblock %}
