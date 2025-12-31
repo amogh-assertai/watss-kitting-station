@@ -1,0 +1,417 @@
+{% extends "base.html" %}
+
+{% block container_class %}container-fluid px-4{% endblock %}
+
+{% block content %}
+<style>
+    /* --- COLOR PALETTE FROM SCREENSHOTS --- */
+    :root {
+        --pending-header-bg: #eef2ff; /* Light Indigo/Purple */
+        --pending-header-text: #4f46e5;
+        --pending-border: #6366f1;    /* Purple Accent */
+        
+        --completed-header-bg: #d1fae5; /* Light Mint Green */
+        --completed-header-text: #065f46;
+        --completed-border: #10b981;    /* Green Accent */
+        --completed-bg: #ecfdf5;        /* Very light green for finished cards */
+        
+        --text-dark: #1f2937;
+        --text-muted: #6b7280;
+    }
+
+    /* --- DASHBOARD HEADER --- */
+    .monitor-header {
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        padding: 20px 30px;
+        margin-bottom: 25px;
+        border: 1px solid #e5e7eb;
+    }
+
+    .stat-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+        font-weight: 700;
+        margin-bottom: 4px;
+    }
+
+    .stat-value {
+        font-size: 1.125rem;
+        font-weight: 700;
+        color: var(--text-dark);
+    }
+
+    /* --- COLUMNS & SECTIONS --- */
+    .cam-column {
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        border: 1px solid #e5e7eb;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .cam-header {
+        padding: 20px 25px;
+        border-bottom: 1px solid #f3f4f6;
+        background-color: #fff;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .cam-body {
+        padding: 20px;
+        flex-grow: 1;
+        background-color: #f9fafb; /* Light gray background for contrast */
+    }
+
+    /* --- SECTION HEADERS (The Colored Bars) --- */
+    .section-header {
+        font-size: 0.85rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        padding: 10px 15px;
+        border-radius: 6px;
+        margin-bottom: 15px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .section-header.completed {
+        background-color: var(--completed-header-bg);
+        color: var(--completed-header-text);
+        border: 1px solid #a7f3d0;
+    }
+
+    .section-header.pending {
+        background-color: var(--pending-header-bg);
+        color: var(--pending-header-text);
+        border: 1px solid #c7d2fe;
+    }
+
+    /* --- PART CARDS (Matches ref.png) --- */
+    .part-card {
+        background: white;
+        border-radius: 8px;
+        padding: 15px;
+        position: relative;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e5e7eb;
+        transition: transform 0.2s, box-shadow 0.2s;
+        min-height: 90px; /* Ensure consistent height */
+    }
+
+    .part-card h5 {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--text-dark);
+        margin-bottom: 5px;
+    }
+
+    .part-qty {
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        font-weight: 500;
+    }
+
+    /* PENDING STYLE (Purple Border) */
+    .part-card.pending {
+        border-left: 5px solid var(--pending-border);
+    }
+    
+    .status-icon-pending {
+        position: absolute;
+        bottom: 12px;
+        right: 12px;
+        color: #f59e0b; /* Amber warning color */
+        font-size: 1.1rem;
+    }
+
+    /* COMPLETED STYLE (Green BG) */
+    .part-card.completed {
+        background-color: var(--completed-bg); /* Light green tint */
+        border: 1px solid var(--completed-border);
+        border-left: 5px solid var(--completed-border);
+    }
+
+    .status-icon-completed {
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        color: var(--completed-border);
+        font-size: 1.2rem;
+    }
+    
+    .completion-time {
+        font-size: 0.7rem;
+        color: var(--completed-header-text);
+        margin-top: 8px;
+        font-weight: 600;
+    }
+
+    /* Progress Bar Override */
+    .progress-thin { height: 6px; background-color: #e5e7eb; border-radius: 4px; }
+    .h-100-card { height: 100%; min-height: 70vh; }
+</style>
+
+<div class="monitor-header">
+    <div class="row align-items-center">
+        <div class="col-md-3 d-flex align-items-center gap-3">
+            <a href="{{ url_for('kitting.index') }}" class="btn btn-outline-secondary btn-sm border-0 fw-bold">
+                <i class="fas fa-arrow-left me-1"></i> Back
+            </a>
+            <span class="badge rounded-pill bg-success px-3 py-2 text-uppercase" style="letter-spacing:1px; font-size: 0.75rem;">
+                <i class="fas fa-circle fa-xs me-2"></i> {{ activity.status }}
+            </span>
+        </div>
+
+        <div class="col-md-5 px-5">
+            <div class="d-flex justify-content-between small fw-bold text-muted mb-1">
+                <span>OVERALL PROGRESS</span>
+                <span id="overall-percent" class="text-dark">0%</span>
+            </div>
+            <div class="progress" style="height: 8px; border-radius: 4px;">
+                <div class="progress-bar bg-success" id="overall-bar" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <div class="col-md-4 d-flex justify-content-end gap-5">
+            <div>
+                <div class="stat-label"><i class="far fa-file-alt me-1"></i> PO Number</div>
+                <div class="stat-value">{{ activity.order_number }}</div>
+            </div>
+            <div>
+                <div class="stat-label"><i class="fas fa-box me-1"></i> Target Kits</div>
+                <div class="stat-value"><span id="completed-kits">0</span> / {{ activity.total_kits_to_pack }}</div>
+            </div>
+            <div>
+                <div class="stat-label"><i class="far fa-clock me-1"></i> Total Time</div>
+                <div class="stat-value font-monospace text-primary" id="timer">00:00:00</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 pb-5">
+    
+    <div class="col-xl-6">
+        <div class="cam-column h-100-card">
+            <div class="cam-header">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="fas fa-video fa-lg text-secondary"></i>
+                    <h5 class="mb-0 fw-bold text-dark">Cam 1</h5>
+                </div>
+                <div style="width: 160px; text-align: right;">
+                    <div class="progress progress-thin mb-1">
+                        <div class="progress-bar bg-success" id="cam1-bar" style="width: 0%"></div>
+                    </div>
+                    <small class="text-muted fw-bold" style="font-size: 0.75rem;"><span id="cam1-counter">0</span> / {{ activity.total_kits_to_pack }} Kits</small>
+                </div>
+            </div>
+
+            <div class="cam-body">
+                <div class="section-header completed">
+                    <span>Completed Parts (<span id="cam1-done-count">0</span>)</span>
+                </div>
+                <div id="cam1-completed-container" class="row g-3 mb-4"></div>
+
+                <div class="section-header pending">
+                    <span>Pending Parts (<span id="cam1-pending-count">0</span>)</span>
+                </div>
+                <div id="cam1-pending-container" class="row g-3">
+                    {% for part in activity.components if part.camera == 'cam1' %}
+                    <div class="col-md-6 part-card-wrapper" id="card-{{ loop.index0 }}" data-index="{{ loop.index0 }}" data-cam="cam1">
+                        <div class="part-card pending">
+                            <h5>{{ part.name }}</h5>
+                            <div class="part-qty">Qty: {{ part.quantity }}</div>
+                            <i class="fas fa-exclamation-circle status-icon-pending"></i>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-6">
+        <div class="cam-column h-100-card">
+            <div class="cam-header">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="fas fa-video fa-lg text-secondary"></i>
+                    <h5 class="mb-0 fw-bold text-dark">Cam 2</h5>
+                </div>
+                <div style="width: 160px; text-align: right;">
+                    <div class="progress progress-thin mb-1">
+                        <div class="progress-bar bg-success" id="cam2-bar" style="width: 0%"></div>
+                    </div>
+                    <small class="text-muted fw-bold" style="font-size: 0.75rem;"><span id="cam2-counter">0</span> / {{ activity.total_kits_to_pack }} Kits</small>
+                </div>
+            </div>
+
+            <div class="cam-body">
+                <div class="section-header completed">
+                    <span>Completed Parts (<span id="cam2-done-count">0</span>)</span>
+                </div>
+                <div id="cam2-completed-container" class="row g-3 mb-4"></div>
+
+                <div class="section-header pending">
+                    <span>Pending Parts (<span id="cam2-pending-count">0</span>)</span>
+                </div>
+                <div id="cam2-pending-container" class="row g-3">
+                    {% for part in activity.components if part.camera == 'cam2' %}
+                    <div class="col-md-6 part-card-wrapper" id="card-{{ loop.index0 }}" data-index="{{ loop.index0 }}" data-cam="cam2">
+                        <div class="part-card pending">
+                            <h5>{{ part.name }}</h5>
+                            <div class="part-qty">Qty: {{ part.quantity }}</div>
+                            <i class="fas fa-exclamation-circle status-icon-pending"></i>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div> <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+<script>
+    // --- 1. CONFIG & INIT ---
+    const TABLE_ID = "{{ activity.table_id }}";
+    const START_TIME_STR = "{{ activity.start_time }}"; 
+    const TOTAL_KITS = {{ activity.total_kits_to_pack }};
+    const startTime = new Date(START_TIME_STR).getTime();
+    
+    const socket = io(SOCKET_URL, { transports: ['websocket'], upgrade: false });
+
+    // --- 2. TIMER ---
+    function updateTimer() {
+        const now = new Date().getTime();
+        const diff = now - startTime;
+        const h = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const s = Math.floor((diff % (1000 * 60)) / 1000);
+        document.getElementById("timer").innerText = 
+            (h<10?"0"+h:h) + ":" + (m<10?"0"+m:m) + ":" + (s<10?"0"+s:s);
+    }
+    setInterval(updateTimer, 1000);
+    updateTimer(); 
+
+    // --- 3. SOCKET LISTENERS ---
+    socket.on('connect', () => {
+        console.log("✅ Monitor Connected");
+        socket.emit('join_table', { table_id: TABLE_ID });
+    });
+
+    socket.on('ui_update', (data) => {
+        if (data.type === 'step_update') {
+            markPartAsCompleted(data.part_index, data.tableId);
+        } else if (data.type === 'kit_completed') {
+            updateKitCounters(data.completed_count);
+        }
+    });
+
+    // --- 4. UI ANIMATION LOGIC ---
+    function markPartAsCompleted(index, tableId) {
+        if(String(tableId) !== String(TABLE_ID)) return;
+
+        const wrapper = document.getElementById(`card-${index}`);
+        if(!wrapper) return;
+
+        const cam = wrapper.getAttribute('data-cam'); 
+        const pendingContainer = document.getElementById(`${cam}-pending-container`);
+        const completedContainer = document.getElementById(`${cam}-completed-container`);
+        
+        // --- VISUAL TRANSFORMATION ---
+        const cardInner = wrapper.querySelector('.part-card');
+        
+        // 1. Swap Classes
+        cardInner.classList.remove('pending');
+        cardInner.classList.add('completed');
+        
+        // 2. Swap Icon
+        const oldIcon = cardInner.querySelector('.status-icon-pending');
+        if(oldIcon) oldIcon.remove();
+
+        const checkIcon = document.createElement('i');
+        checkIcon.className = 'fas fa-check-circle status-icon-completed';
+        cardInner.appendChild(checkIcon);
+
+        // 3. Add Timestamp
+        const timeBadge = document.createElement('div');
+        timeBadge.className = 'completion-time';
+        timeBadge.innerText = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        cardInner.appendChild(timeBadge);
+
+        // 4. Move Animation
+        wrapper.style.transition = 'opacity 0.3s ease';
+        wrapper.style.opacity = '0';
+        
+        setTimeout(() => {
+            completedContainer.appendChild(wrapper);
+            wrapper.style.opacity = '1';
+            updateSectionCounts(cam);
+        }, 300);
+    }
+
+    function updateSectionCounts(cam) {
+        document.getElementById(`${cam}-done-count`).innerText = document.getElementById(`${cam}-completed-container`).children.length;
+        document.getElementById(`${cam}-pending-count`).innerText = document.getElementById(`${cam}-pending-container`).children.length;
+    }
+
+    function updateKitCounters(completedCount) {
+        document.getElementById('completed-kits').innerText = completedCount;
+        document.getElementById('cam1-counter').innerText = completedCount;
+        document.getElementById('cam2-counter').innerText = completedCount;
+
+        const percent = Math.round((completedCount / TOTAL_KITS) * 100);
+        document.getElementById('overall-percent').innerText = percent + "%";
+        document.getElementById('overall-bar').style.width = percent + "%";
+        document.getElementById('cam1-bar').style.width = percent + "%";
+        document.getElementById('cam2-bar').style.width = percent + "%";
+
+        // Reset cards after delay
+        setTimeout(resetCardsForNextKit, 3000);
+    }
+
+    function resetCardsForNextKit() {
+        ['cam1', 'cam2'].forEach(cam => {
+            const pendingContainer = document.getElementById(`${cam}-pending-container`);
+            const completedContainer = document.getElementById(`${cam}-completed-container`);
+            
+            while (completedContainer.children.length > 0) {
+                const wrapper = completedContainer.children[0];
+                const cardInner = wrapper.querySelector('.part-card');
+                
+                // Reset Style
+                cardInner.classList.remove('completed');
+                cardInner.classList.add('pending');
+                
+                // Remove Timestamp & Check Icon
+                const ts = cardInner.querySelector('.completion-time');
+                if(ts) ts.remove();
+                const check = cardInner.querySelector('.status-icon-completed');
+                if(check) check.remove();
+
+                // Restore Warning Icon
+                if(!cardInner.querySelector('.status-icon-pending')) {
+                    const icon = document.createElement('i');
+                    icon.className = 'fas fa-exclamation-circle status-icon-pending';
+                    cardInner.appendChild(icon);
+                }
+                pendingContainer.appendChild(wrapper);
+            }
+            updateSectionCounts(cam);
+        });
+    }
+
+    // Init
+    updateSectionCounts('cam1');
+    updateSectionCounts('cam2');
+</script>
+{% endblock %}

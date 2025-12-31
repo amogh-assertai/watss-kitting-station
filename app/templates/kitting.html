@@ -13,11 +13,48 @@
 </div>
 
 <div class="row">
-    <div class="col-12 text-center py-5 text-muted bg-white border rounded shadow-sm">
-        <i class="fas fa-industry fa-3x mb-3"></i>
-        <h4>Current Activities Dashboard</h4>
-        <p>Live status of tables will appear here.</p>
-    </div>
+    {% if active_jobs %}
+        {% for job in active_jobs %}
+        <div class="col-md-4 mb-4">
+            <div class="card shadow-sm h-100 border-top-0 border-end-0 border-bottom-0 border-start border-5 border-primary">
+                
+                <div class="card-header bg-white text-center border-bottom-0 pb-0">
+                    <span class="badge bg-primary fs-6 px-3 py-2 rounded-pill">
+                        Table {{ job.table_id }}
+                    </span>
+                </div>
+
+                <div class="card-body text-center pt-2">
+                    <h5 class="card-title fw-bold text-dark mb-1">{{ job.kit_name }}</h5>
+                    <p class="text-muted small mb-3">Order: {{ job.order_number }}</p>
+
+                    <div class="d-flex justify-content-center align-items-center mb-2">
+                        <span class="h4 fw-bold mb-0 text-primary">{{ job.current_kit_index|default(0) }}</span>
+                        <span class="text-muted mx-2">/</span>
+                        <span class="h4 fw-bold mb-0 text-dark">{{ job.total_kits_to_pack }}</span>
+                    </div>
+                    <small class="text-muted text-uppercase fw-bold" style="font-size: 0.7rem;">Kits Completed</small>
+                </div>
+
+                <div class="card-footer bg-white border-top-0 d-flex justify-content-between pb-3 px-3">
+                    <a href="{{ url_for('kitting.monitor_activity', activity_id=job._id) }}" class="btn btn-primary btn-sm px-3">
+                        <i class="fas fa-eye me-1"></i> View Monitor
+                    </a>
+                    
+                    <button class="btn btn-outline-danger btn-sm" onclick="completeManually('{{ job._id }}')">
+                        <i class="fas fa-times-circle me-1"></i> Complete Activity Manually
+                    </button>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="col-12 text-center py-5 text-muted bg-white border rounded shadow-sm">
+            <i class="fas fa-industry fa-3x mb-3 text-secondary opacity-50"></i>
+            <h4>No Active Kitting Jobs</h4>
+            <p>Start a new activity using the button above.</p>
+        </div>
+    {% endif %}
 </div>
 
 <div class="modal fade" id="newActivityModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
@@ -156,7 +193,7 @@
                 </div>
                 
                  <div id="final-btns" class="w-100 d-flex justify-content-end d-none">
-                     <button class="btn btn-success btn-lg w-100" onclick="alert('Starting Kitting Logic... (Functionality Coming Soon)')">
+                     <button class="btn btn-success btn-lg w-100" onclick="submitStartJob()">
                         <i class="fas fa-play me-2"></i> Start Kitting Job
                     </button>
                 </div>
@@ -171,8 +208,11 @@
     
     // Force WebSocket transport for reliability
     const socket = io(SOCKET_URL, {
-        transports: ['websocket'],
-        upgrade: false
+        transports: ['websocket'], // Force WebSocket only (Skip polling)
+        upgrade: false,            // Don't try to upgrade (since we forced it)
+        reconnection: true,        // Allow reconnection
+        reconnectionAttempts: 5,   // Give up after 5 tries if down
+        reconnectionDelay: 1000    // Wait 1s between retries
     });
 
     let currentTableId = null;
@@ -427,6 +467,79 @@
         clearTimeout(handshakeTimer);
         clearInterval(countdownInterval);
         switchView('step1');
+    }
+
+    async function submitStartJob() {
+        // 1. UI Feedback (Disable button, show spinner)
+        const btn = document.querySelector('#final-btns button');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Initializing System...';
+        btn.disabled = true;
+
+        // 2. Gather Data
+        const payload = {
+            table_id: currentTableId,
+            order_number: document.getElementById('orderNumber').value,
+            kit_name: document.getElementById('kitName').value,
+            edp_number: document.getElementById('edpNumber').value,
+            units: document.getElementById('packUnits').value
+        };
+
+        try {
+            // 3. Send to Backend
+            // The Backend will: Save to DB -> Fetch Parts -> Notify AI
+            const response = await fetch("{{ url_for('kitting.start_activity') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                console.log("Job Started! Redirecting...");
+                window.location.href = result.redirect_url;
+            } else {
+                alert("Error: " + result.message);
+                // Reset Button
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+        } catch (error) {
+            console.error(error);
+            alert("Network Error: Could not start job.");
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    }
+
+    async function completeManually(activityId) {
+        // 1. The Confirmation Prompt
+        const isConfirmed = confirm("⚠️ Are you sure you want to manually complete this activity?\n\nThis will stop the AI tracking and mark the job as 'Completed Manually'.");
+        
+        if (!isConfirmed) {
+            return; // Stop if user clicked Cancel
+        }
+
+        try {
+            // 2. Call the Backend
+            const response = await fetch("{{ url_for('kitting.complete_manual') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ activity_id: activityId })
+            });
+            
+            const result = await response.json();
+            
+            if (result.status === 'success') {
+                // 3. Refresh to remove the card from the dashboard
+                window.location.reload(); 
+            } else {
+                alert("Error: " + result.message);
+            }
+        } catch (error) {
+            console.error(error);
+            alert("Connection error. Could not update status.");
+        }
     }
 </script>
 {% endblock %}
