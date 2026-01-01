@@ -9,6 +9,12 @@ from app.socket_events import socketio
 
 from datetime import datetime
 
+
+import os
+import json
+from werkzeug.utils import secure_filename
+from app.config import Config
+
 kitting_bp = Blueprint('kitting', __name__, url_prefix='/kitting')
 
 @kitting_bp.route('/')
@@ -120,7 +126,7 @@ def start_activity():
             "edp_number": data.get('edp_number'),
             "order_number": data.get('order_number'),
             "total_kits_to_pack": int(data.get('units', 1)),
-            "current_kit_index": 0,
+            "current_kit_index": 1,
             "status": "on-going",
             "components": parts_list, 
             "history": []
@@ -192,3 +198,147 @@ def complete_manual():
         return jsonify({'status': 'success', 'message': 'Activity marked as completed.'})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+    
+    
+@kitting_bp.route('/api/<table_id>/detection', methods=['POST'])
+def update_detection(table_id):
+    db = get_db()
+    
+    # 1. PARSE REQUEST (Kept exactly as provided)
+    if 'image' not in request.files: return jsonify({"message": "No image"}), 422
+    file = request.files['image']
+    raw_payload = request.form.get('payload')
+    data = json.loads(raw_payload) if raw_payload else {}
+    
+    cam_id = data.get('camId', '')
+    detected_part = data.get('detectedPart', '')
+    ai_detected_name = data.get('AiDetectedPartName', '')
+    avg_threshold = data.get('avgThreshold', 0.0)
+    
+    # 2. FIND ACTIVE JOB
+    activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
+    if not activity: 
+        return jsonify({"message": "No active job", "code": "invalid-reference"}), 404
+    
+    activity_id = str(activity['_id'])
+    kit_name = activity.get('kit_name', 'Unknown Kit')
+    current_kit_num = activity.get('current_kit_index', 1)
+
+    # Save Image
+    filename = secure_filename(f"{activity_id}_kit{current_kit_num}_{detected_part}_{int(datetime.utcnow().timestamp())}.jpg")
+    save_path = os.path.join(Config.UPLOAD_FOLDER, filename)
+    if not os.path.exists(Config.UPLOAD_FOLDER): os.makedirs(Config.UPLOAD_FOLDER)
+    file.save(save_path)
+    image_url = url_for('static', filename=f'captures/{filename}')
+
+    # 3. PREPARE RESPONSE DATA
+    response_payload = {
+        "detectedPart": detected_part,
+        "avgThreshold": avg_threshold,
+        "kitNumber": current_kit_num
+    }
+
+    # 4. MATCHING LOGIC (Kept exactly as provided)
+    current_components = activity.get('components', [])
+    target_index = -1
+    target_part = None
+    part_already_done_in_this_kit = False
+    
+    for idx, part in enumerate(current_components):
+        is_name_match = str(part.get('name')).strip() == str(detected_part).strip()
+        is_cam_match = str(part.get('camera')).strip() == str(cam_id).strip()
+        
+        if is_name_match and is_cam_match:
+            required = part.get('quantity', 1)
+            found = part.get('found_quantity', 0)
+            
+            if found < required:
+                target_part = part
+                target_index = idx
+                break
+            else:
+                part_already_done_in_this_kit = True
+
+    # --- SCENARIO A: WRONG PART DETECTED ---
+    if not target_part:
+        message_str = "wrong_part_detected"
+        error_code = "wrong-part"
+        
+        if part_already_done_in_this_kit:
+            message_str = "part_already_scanned_for_current_kit"
+            error_code = "already-scanned"
+
+        socket_payload = {
+            "message": message_str,
+            "imageUrl": image_url,
+            "kittingId": activity_id,
+            "tableId": table_id,
+            "camId": cam_id,
+            "kitName": kit_name,
+            "detectedPart": detected_part,
+            "AiDetectedPartName": ai_detected_name,
+            "avgThreshold": avg_threshold,
+            "type": "error_alert",
+            "error_code": error_code
+        }
+        socketio.emit('ui_update', socket_payload, to=f"table_{table_id}")
+
+        response_payload.update({ "message": message_str, "code": error_code })
+        return jsonify(response_payload), 409
+
+
+    # --- SCENARIO B: CORRECT PART DETECTED (UPDATED LOGIC) ---
+    new_found = target_part.get('found_quantity', 0) + 1
+    required_qty = target_part.get('quantity', 1)
+    
+    update_field = f"components.{target_index}"
+    db_updates = {
+        f"{update_field}.found_quantity": new_found,
+        f"{update_field}.last_image_url": image_url,
+        "last_updated": datetime.utcnow(),
+        "last_detected_index": target_index  # <--- CRITICAL: Saving State to DB
+    }
+
+    is_completed = False
+    new_sequence = target_part.get('sequence_order', 0)
+
+    if new_found >= required_qty:
+        is_completed = True
+        db_updates[f"{update_field}.status"] = "completed"
+        if not new_sequence:
+            completed_count = sum(1 for p in current_components if p.get('status') == 'completed')
+            new_sequence = completed_count + 1
+            db_updates[f"{update_field}.sequence_order"] = new_sequence
+
+    # Execute DB Update
+    db.activities.update_one({"_id": ObjectId(activity_id)}, {"$set": db_updates})
+
+    # --- NEW SOCKET PAYLOAD: TRIGGER REFRESH ---
+    socket_payload = {
+        "type": "refresh_needed",  # Tells client: Show Popup -> Reload
+        "popup_data": {            # Everything needed for the green popup
+            "message": "part-detected",
+            "imageUrl": image_url,
+            "kittingId": activity_id,
+            "tableId": table_id,
+            "camId": cam_id,
+            "kitName": kit_name,
+            "detectedPart": detected_part,
+            "AiDetectedPartName": ai_detected_name,
+            "avgThreshold": avg_threshold,
+            "part_name": target_part.get('name'),
+            "found_qty": new_found,
+            "required_qty": required_qty
+        }
+    }
+    socketio.emit('ui_update', socket_payload, to=f"table_{table_id}")
+
+    # Return API Response
+    response_payload.update({
+        "message": "correct-part-detected",
+        "found": new_found,
+        "required": required_qty
+    })
+    
+    return jsonify(response_payload), 200
