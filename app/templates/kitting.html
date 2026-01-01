@@ -28,12 +28,19 @@
                     <h5 class="card-title fw-bold text-dark mb-1">{{ job.kit_name }}</h5>
                     <p class="text-muted small mb-3">Order: {{ job.order_number }}</p>
 
-                    <div class="d-flex justify-content-center align-items-center mb-2">
-                        <span class="h4 fw-bold mb-0 text-primary">{{ job.current_kit_index|default(0) }}</span>
-                        <span class="text-muted mx-2">/</span>
-                        <span class="h4 fw-bold mb-0 text-dark">{{ job.total_kits_to_pack }}</span>
+                    <div class="row g-0 py-2 bg-light rounded align-items-center border">
+                        <div class="col-6 border-end">
+                            <small class="text-muted fw-bold d-block text-uppercase" style="font-size: 0.7rem;">Cam 1</small>
+                            <span class="h5 fw-bold text-primary mb-0">{{ job.current_kit_index_cam1|default(1) }}</span>
+                            <span class="text-muted small">/ {{ job.total_kits_to_pack }}</span>
+                        </div>
+                        <div class="col-6">
+                            <small class="text-muted fw-bold d-block text-uppercase" style="font-size: 0.7rem;">Cam 2</small>
+                            <span class="h5 fw-bold text-primary mb-0">{{ job.current_kit_index_cam2|default(1) }}</span>
+                            <span class="text-muted small">/ {{ job.total_kits_to_pack }}</span>
+                        </div>
                     </div>
-                    <small class="text-muted text-uppercase fw-bold" style="font-size: 0.7rem;">Kits Completed</small>
+                    <small class="text-muted text-uppercase fw-bold mt-2 d-block" style="font-size: 0.65rem;">Current Kit Index</small>
                 </div>
 
                 <div class="card-footer bg-white border-top-0 d-flex justify-content-between pb-3 px-3">
@@ -42,7 +49,7 @@
                     </a>
                     
                     <button class="btn btn-outline-danger btn-sm" onclick="completeManually('{{ job._id }}')">
-                        <i class="fas fa-times-circle me-1"></i> Complete Activity Manually
+                        <i class="fas fa-times-circle me-1"></i> Complete
                     </button>
                 </div>
             </div>
@@ -52,10 +59,10 @@
         <div class="col-12 text-center py-5 text-muted bg-white border rounded shadow-sm">
             <i class="fas fa-industry fa-3x mb-3 text-secondary opacity-50"></i>
             <h4>No Active Kitting Jobs</h4>
-            <a href="{{ url_for('kitting.history_index') }}" class="btn btn-outline-secondary fw-bold">
+            <a href="{{ url_for('kitting.history_index') }}" class="btn btn-outline-secondary fw-bold mt-2">
                 <i class="fas fa-history me-2"></i> View Past Jobs
             </a>
-            <p>Start a new activity using the button above.</p>
+            <p class="mt-3">Start a new activity using the button above.</p>
         </div>
     {% endif %}
 </div>
@@ -209,25 +216,22 @@
 <script>
     console.log("Attempting to connect to Socket Server at:", SOCKET_URL);
     
-    // Force WebSocket transport for reliability
     const socket = io(SOCKET_URL, {
-        transports: ['websocket'], // Force WebSocket only (Skip polling)
-        upgrade: false,            // Don't try to upgrade (since we forced it)
-        reconnection: true,        // Allow reconnection
-        reconnectionAttempts: 5,   // Give up after 5 tries if down
-        reconnectionDelay: 1000    // Wait 1s between retries
+        transports: ['websocket'], 
+        upgrade: false,            
+        reconnection: true,        
+        reconnectionAttempts: 5,   
+        reconnectionDelay: 1000    
     });
 
     let currentTableId = null;
     let handshakeTimer = null;
     let countdownInterval = null;
     
-    // New variables for Camera Logic
-    let currentCamStep = 0; // 1 = Cam1, 2 = Cam2
+    let currentCamStep = 0; 
     let camTimer = null;
     let camInterval = null;
 
-    // --- CONNECTION DEBUG ---
     socket.on('connect', () => {
         console.log("✅ UI Socket Connected! ID:", socket.id);
     });
@@ -241,7 +245,6 @@
     socket.on('ai_handshake_response', (data) => {
         console.log("📩 AI Responded:", data);
         if (data.message === 'starting-ai-application' && String(data.tableId) === String(currentTableId)) {
-            // Success
             clearTimeout(handshakeTimer);
             clearInterval(countdownInterval);
             
@@ -364,7 +367,6 @@
         currentCamStep = camNum;
         switchView('camera');
         
-        // Reset Camera UI elements
         document.getElementById('cam-title').innerText = `Setup Camera ${camNum}`;
         document.getElementById('cam-loading').classList.remove('d-none');
         document.getElementById('cam-result').classList.add('d-none');
@@ -372,10 +374,8 @@
         document.getElementById('camNextBtn').disabled = true;
         updateCamStatus("Requesting Capture...");
 
-        // Start 60s Timer for Camera
         startCamTimer();
 
-        // Emit Request to AI
         const eventName = `capture_cam${camNum}_signal`;
         console.log(`📸 Requesting Cam ${camNum}...`);
         socket.emit(eventName, { 
@@ -392,7 +392,6 @@
         console.log(`📸 Cam ${camNum} Result:`, data);
         if(String(data.tableId) !== String(currentTableId)) return;
         
-        // Stop Timer
         clearInterval(camInterval);
         clearTimeout(camTimer);
 
@@ -400,7 +399,6 @@
 
         if(data.status === 'success') {
             document.getElementById('cam-result').classList.remove('d-none');
-            // Cache busting to ensure we see the fresh image
             document.getElementById('cam-image').src = data.imageUrl + "?t=" + new Date().getTime();
             document.getElementById('camNextBtn').disabled = false;
         } else {
@@ -430,9 +428,9 @@
 
     function nextCameraStep() {
         if(currentCamStep === 1) {
-            startCameraSequence(2); // Go to Cam 2
+            startCameraSequence(2); 
         } else {
-            switchView('final'); // Done
+            switchView('final'); 
         }
     }
 
@@ -442,7 +440,6 @@
 
     // --- VIEW SWITCHER HELPER ---
     function switchView(viewName) {
-        // Hide all containers
         const views = ['step1', 'step2', 'camera', 'final'];
         views.forEach(v => {
             const container = document.getElementById(`${v}-container`);
@@ -452,14 +449,12 @@
             if(btns) btns.classList.add('d-none');
         });
 
-        // Show specific view
         const targetContainer = document.getElementById(`${viewName}-container`);
         const targetBtns = document.getElementById(`${viewName}-btns`);
         
         if(targetContainer) targetContainer.classList.remove('d-none');
         if(targetBtns) targetBtns.classList.remove('d-none');
 
-        // Special handling for Final View
         if(viewName === 'final') {
             document.getElementById('modalTitle').innerText = "Ready to Start";
             document.getElementById('finalTableId').innerText = currentTableId;
@@ -473,13 +468,11 @@
     }
 
     async function submitStartJob() {
-        // 1. UI Feedback (Disable button, show spinner)
         const btn = document.querySelector('#final-btns button');
         const originalText = btn.innerHTML;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Initializing System...';
         btn.disabled = true;
 
-        // 2. Gather Data
         const payload = {
             table_id: currentTableId,
             order_number: document.getElementById('orderNumber').value,
@@ -489,8 +482,6 @@
         };
 
         try {
-            // 3. Send to Backend
-            // The Backend will: Save to DB -> Fetch Parts -> Notify AI
             const response = await fetch("{{ url_for('kitting.start_activity') }}", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -503,7 +494,6 @@
                 window.location.href = result.redirect_url;
             } else {
                 alert("Error: " + result.message);
-                // Reset Button
                 btn.innerHTML = originalText;
                 btn.disabled = false;
             }
@@ -516,15 +506,11 @@
     }
 
     async function completeManually(activityId) {
-        // 1. The Confirmation Prompt
         const isConfirmed = confirm("⚠️ Are you sure you want to manually complete this activity?\n\nThis will stop the AI tracking and mark the job as 'Completed Manually'.");
         
-        if (!isConfirmed) {
-            return; // Stop if user clicked Cancel
-        }
+        if (!isConfirmed) return; 
 
         try {
-            // 2. Call the Backend
             const response = await fetch("{{ url_for('kitting.complete_manual') }}", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -534,7 +520,6 @@
             const result = await response.json();
             
             if (result.status === 'success') {
-                // 3. Refresh to remove the card from the dashboard
                 window.location.reload(); 
             } else {
                 alert("Error: " + result.message);

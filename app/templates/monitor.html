@@ -4,8 +4,8 @@
 
 {% block content %}
 <style>
-    /* --- EXISTING STYLES --- */
-    :root { --pending-header-bg: #eef2ff; --pending-header-text: #4f46e5; --pending-border: #6366f1; --completed-header-bg: #d1fae5; --completed-header-text: #065f46; --completed-border: #10b981; --completed-bg: #ecfdf5; --text-dark: #1f2937; --text-muted: #6b7280; }
+    /* --- CORE STYLES --- */
+    :root { --text-dark: #1f2937; --text-muted: #6b7280; }
     .monitor-header { background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 20px 30px; margin-bottom: 25px; border: 1px solid #e5e7eb; }
     .stat-label { font-size: 0.7rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700; }
     .stat-value { font-size: 1.125rem; font-weight: 700; color: var(--text-dark); }
@@ -13,35 +13,88 @@
     .cam-header { padding: 20px 25px; border-bottom: 1px solid #f3f4f6; display: flex; justify-content: space-between; align-items: center; }
     .cam-body { padding: 20px; flex-grow: 1; background-color: #f9fafb; }
     .section-header { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; display: flex; justify-content: space-between; }
-    .section-header.completed { background-color: var(--completed-header-bg); color: var(--completed-header-text); border: 1px solid #a7f3d0; }
-    .section-header.pending { background-color: var(--pending-header-bg); color: var(--pending-header-text); border: 1px solid #c7d2fe; }
+    .section-header.completed { background-color: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+    .section-header.pending { background-color: #eef2ff; color: #4f46e5; border: 1px solid #c7d2fe; }
     .part-card { background: white; border-radius: 8px; padding: 15px; position: relative; box-shadow: 0 1px 2px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; min-height: 90px; }
-    .part-card.pending { border-left: 5px solid var(--pending-border); }
-    .part-card.completed { background-color: var(--completed-bg); border: 1px solid var(--completed-border); border-left: 5px solid var(--completed-border); }
-    .order-badge { position: absolute; top: 0; left: 0; background: var(--completed-border); color: white; font-size: 0.75rem; font-weight: 800; padding: 2px 8px; border-bottom-right-radius: 8px; }
+    .part-card.pending { border-left: 5px solid #6366f1; }
+    .part-card.completed { background-color: #ecfdf5; border: 1px solid #10b981; border-left: 5px solid #10b981; }
+    .order-badge { position: absolute; top: 0; left: 0; background: #10b981; color: white; font-size: 0.75rem; font-weight: 800; padding: 2px 8px; border-bottom-right-radius: 8px; }
     .last-detected-badge { position: absolute; bottom: 0; right: 0; background: #32325d; color: white; font-size: 0.65rem; font-weight: bold; text-transform: uppercase; padding: 3px 10px; border-top-left-radius: 8px; animation: flashBadge 1s infinite alternate; }
     @keyframes flashBadge { from { opacity: 0.8; } to { opacity: 1; } }
+    .h-100-card { height: 100%; min-height: 70vh; }
+    .btn-cam-history { padding: 4px 10px; font-size: 0.8rem; border-radius: 20px; font-weight: bold; }
 
-    /* --- OVERLAYS --- */
-    #success-popup, #kit-completion-overlay, #kit-warning-overlay, #kit-error-overlay, #job-completion-overlay { 
-        display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 9999; 
+    /* --- SIDE PANEL POPUPS (CAM 1 & CAM 2) --- */
+    .side-popup { 
+        display: none; /* Hidden by default */
+        position: fixed; 
+        top: 50%; 
+        transform: translateY(-50%);
+        width: 48vw; 
+        height: 95vh; 
+        border-radius: 20px; 
+        box-shadow: 0 25px 80px rgba(0,0,0,0.6); 
+        z-index: 10000; /* High, but below Red Screen */
+        padding: 20px;
+        flex-direction: column; 
+        justify-content: space-between;
+    }
+
+    /* Left Dock (Cam 1) */
+    #overlay-cam1 { left: 1vw; right: auto; }
+    /* Right Dock (Cam 2) */
+    #overlay-cam2 { right: 1vw; left: auto; }
+
+    /* Theme: Green (Detection) */
+    .theme-green { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: 2px solid #a7f3d0; }
+    .theme-green .popup-icon { color: white; }
+    .theme-green .popup-badge { background-color: white; color: #059669; }
+
+    /* Theme: Dark Green (Kit Complete) */
+    .theme-dark-green { background: linear-gradient(135deg, #065f46 0%, #047857 100%); color: white; border: 2px solid #34d399; }
+    .theme-dark-green .popup-icon { color: #34d399; }
+    .theme-dark-green .popup-badge { background-color: #34d399; color: #064e3b; }
+
+    /* Theme: Yellow (Warning/Overcount) */
+    .theme-yellow { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; border: 2px solid #fde68a; }
+    .theme-yellow .popup-icon { color: #fffbeb; }
+    .theme-yellow .popup-badge { background-color: #fffbeb; color: #b45309; }
+
+    /* Image Container inside Popup */
+    .popup-img-container {
+        flex-grow: 1;
+        width: 100%;
+        background-color: white;
+        border-radius: 15px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        margin-bottom: 15px;
+        min-height: 50vh; 
+    }
+    .popup-img-container img { width: 100%; height: 100%; object-fit: contain; }
+
+    /* --- GLOBAL RED SCREEN (HIGHEST PRIORITY) --- */
+    #kit-error-overlay { 
+        display: none; 
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+        background-color: rgba(220, 38, 38, 0.98); 
+        z-index: 20000; /* Above everything */
         flex-direction: column; align-items: center; justify-content: center; text-align: center; 
     }
-    
-    #success-popup { background-color: rgba(16, 185, 129, 0.92); color: white; }
-    #kit-completion-overlay { background-color: #064e3b; color: white; z-index: 10000; }
-    #kit-warning-overlay { background-color: #f59e0b; color: white; z-index: 10001; }
-    #kit-error-overlay { background-color: rgba(220, 38, 38, 0.98); color: white; z-index: 10002; }
-    
-    /* NEW: JOB COMPLETED OVERLAY (Blue/Gold) */
-    #job-completion-overlay { background-color: #1e3a8a; color: white; z-index: 10005; }
-
-    .success-content { background: white; color: #333; padding: 30px; border-radius: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); max-width: 450px; width: 90%; }
     .error-card { background: white; color: #333; padding: 30px; border-radius: 12px; box-shadow: 0 25px 50px rgba(0,0,0,0.5); max-width: 600px; width: 90%; text-align: left; }
     .reason-select { border: 2px solid #dc2626; padding: 10px; font-size: 1.1rem; border-radius: 8px; width: 100%; margin-bottom: 20px; }
+
+    /* --- GLOBAL JOB COMPLETE --- */
+    #job-completion-overlay { 
+        display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+        background-color: #1e3a8a; color: white; 
+        z-index: 20001; /* Above Red Screen */
+        flex-direction: column; align-items: center; justify-content: center; text-align: center; 
+    }
     .blink-active { animation: blinker 1s linear infinite; }
     @keyframes blinker { 50% { opacity: 0.3; } }
-    .h-100-card { height: 100%; min-height: 70vh; }
 
     /* --- GRID STYLES --- */
     .kit-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 15px; padding: 10px; }
@@ -52,38 +105,10 @@
     .kit-red { background-color: #ef4444; border-color: #b91c1c; }
     .kit-blue { background-color: #3b82f6; border-color: #2563eb; animation: pulse 2s infinite; }
     .kit-grey { background-color: #e5e7eb; color: #9ca3af; border-color: #d1d5db; cursor: default; }
-    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(59, 130, 246, 0); } 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); } }
 </style>
 
-<div id="success-popup">
-    <div class="success-content">
-        <div class="mb-2 text-success"><i class="fas fa-check-circle fa-5x"></i></div>
-        <h2 class="fw-bold text-success mb-1">PART DETECTED</h2>
-        <h4 class="fw-bold text-dark" id="popup-part-name">Part Name</h4>
-        <div class="badge bg-secondary mb-3 fs-6" id="popup-qty">Qty: 1/1</div>
-        <div class="border rounded p-1 d-inline-block bg-light">
-            <img id="popup-image" src="" style="height: 180px; width: auto; max-width: 100%; object-fit: contain; border-radius: 8px;">
-        </div>
-    </div>
-</div>
-
-<div id="kit-completion-overlay">
-    <div class="blink-active">
-        <i class="fas fa-box-open fa-6x text-white mb-4"></i>
-        <h1 class="fw-bold display-3 text-white">KIT <span id="completed-kit-num">#</span></h1>
-        <h2 class="text-white opacity-75 text-uppercase">Completed Successfully</h2>
-    </div>
-</div>
-
-<div id="kit-warning-overlay">
-    <div class="mb-4"><i class="fas fa-exclamation-triangle fa-6x text-white"></i></div>
-    <h1 class="fw-bold display-4 text-white">OVERCOUNT DETECTED</h1>
-    <h3 class="text-white mb-4">Proceeding to next kit...</h3>
-    <div class="bg-white text-dark p-3 rounded shadow-sm d-inline-block text-start" style="min-width: 300px;">
-        <h6 class="border-bottom pb-2 mb-2 fw-bold text-warning">Extra Parts Detected:</h6>
-        <ul class="mb-0 ps-3" id="warning-list"></ul>
-    </div>
-</div>
+<div id="overlay-cam1" class="side-popup theme-green"></div>
+<div id="overlay-cam2" class="side-popup theme-green"></div>
 
 <div id="kit-error-overlay">
     <div class="error-card">
@@ -116,18 +141,16 @@
         <div class="col-md-3 d-flex align-items-center gap-3">
             <a href="{{ url_for('kitting.index') }}" class="btn btn-outline-secondary btn-sm border-0 fw-bold"><i class="fas fa-arrow-left me-1"></i> Back</a>
             <span class="badge rounded-pill bg-success px-3 py-2 text-uppercase">{{ activity.status }}</span>
-            <button class="btn btn-primary btn-sm fw-bold px-3" onclick="openHistoryGrid()">
-                <i class="fas fa-th me-2"></i> View Kits
-            </button>
         </div>
         <div class="col-md-5 px-5">
             <div class="d-flex justify-content-between small fw-bold text-muted mb-1">
-                <span>OVERALL PROGRESS (Job)</span>
+                <span>OVERALL PROGRESS</span>
                 {% set parts_per_kit = activity.components|length %}
                 {% set total_job_parts = parts_per_kit * activity.total_kits_to_pack %}
-                {% set completed_in_current = activity.components|selectattr('status','equalto','completed')|list|length %}
-                {% set parts_done_historically = ((activity.current_kit_index - 1) * parts_per_kit) %}
-                {% set total_done = parts_done_historically + completed_in_current %}
+                {% set c1_done = (activity.current_kit_index_cam1 - 1) * (activity.components|selectattr('camera','equalto','cam1')|list|length) %}
+                {% set c2_done = (activity.current_kit_index_cam2 - 1) * (activity.components|selectattr('camera','equalto','cam2')|list|length) %}
+                {% set current_in_progress = activity.components|selectattr('status','equalto','completed')|list|length %}
+                {% set total_done = c1_done + c2_done + current_in_progress %}
                 {% set percent = (total_done / total_job_parts * 100)|round|int if total_job_parts > 0 else 0 %}
                 <span class="text-dark">{{ percent }}%</span>
             </div>
@@ -137,7 +160,7 @@
         </div>
         <div class="col-md-4 d-flex justify-content-end gap-5">
             <div><div class="stat-label">PO Number</div><div class="stat-value">{{ activity.order_number }}</div></div>
-            <div><div class="stat-label">Target Kits</div><div class="stat-value">{{ activity.current_kit_index - 1 }} / {{ activity.total_kits_to_pack }}</div></div>
+            <div><div class="stat-label">Target Kits</div><div class="stat-value">Target: {{ activity.total_kits_to_pack }}</div></div>
         </div>
     </div>
 </div>
@@ -146,56 +169,86 @@
     {% for cam_name in ['cam1', 'cam2'] %}
     <div class="col-xl-6">
         <div class="cam-column h-100-card">
+            
+            {% set cam_index = activity.current_kit_index_cam1 if cam_name == 'cam1' else activity.current_kit_index_cam2 %}
+            {% set is_cam_done = cam_index > activity.total_kits_to_pack %}
+
             <div class="cam-header">
-                <div class="d-flex align-items-center gap-2">
+                <div class="d-flex align-items-center gap-3">
                     <i class="fas fa-video fa-lg text-secondary"></i>
                     <h5 class="mb-0 fw-bold text-dark text-uppercase">{{ cam_name }}</h5>
+                    <button class="btn btn-outline-primary btn-cam-history ms-2" onclick="openHistoryGrid('{{ cam_name }}')">
+                        <i class="fas fa-history me-1"></i> History
+                    </button>
                 </div>
-                <div class="small text-muted fw-bold">Kit #{{ activity.current_kit_index }}</div>
+                <div class="small text-muted fw-bold">
+                    {% if is_cam_done %}
+                        <span class="badge bg-success text-white">ALL COMPLETED</span>
+                    {% else %}
+                        Kit #{{ cam_index }}
+                    {% endif %}
+                </div>
             </div>
+            
             <div class="cam-body">
-                <div class="section-header completed">
-                    {% set completed_count = activity.components | selectattr('camera', 'equalto', cam_name) | selectattr('status', 'equalto', 'completed') | list | length %}
-                    <span>Completed ({{ completed_count }})</span>
-                </div>
-                <div class="row g-3 mb-4">
-                    {% for part in activity.components %}
-                        {% if part.camera == cam_name and part.status == 'completed' %}
-                        <div class="col-md-6">
-                            <div class="part-card completed">
-                                <div class="order-badge">#{{ part.sequence_order }}</div>
-                                {% if activity.last_detected_index == loop.index0 %}<div class="last-detected-badge">Last Detected</div>{% endif %}
-                                <h5>{{ part.name }}</h5>
-                                <div class="part-qty text-primary fw-bold">Qty: {{ part.found_quantity }} / {{ part.quantity }}</div>
-                            </div>
-                        </div>
-                        {% endif %}
-                    {% endfor %}
-                </div>
-                <div class="section-header pending">
-                    {% set pending_count = activity.components | selectattr('camera', 'equalto', cam_name) | selectattr('status', '!=', 'completed') | list | length %}
-                    <span>Pending ({{ pending_count }})</span>
-                </div>
-                <div class="row g-3">
-                    {% for part in activity.components %}
-                        {% if part.camera == cam_name and part.status != 'completed' %}
-                        <div class="col-md-6">
-                            <div class="part-card pending">
-                                {% if activity.last_detected_index == loop.index0 %}<div class="last-detected-badge">Last Detected</div>{% endif %}
-                                <h5>{{ part.name }}</h5>
-                                <div class="part-qty">
-                                    {% if part.found_quantity and part.found_quantity > 0 %}
-                                        <span class="text-primary fw-bold">Qty: {{ part.found_quantity }} / {{ part.quantity }}</span>
-                                    {% else %}
-                                        Qty: 0 / {{ part.quantity }}
+                {% if is_cam_done %}
+                    <div class="h-100 d-flex flex-column align-items-center justify-content-center text-muted opacity-50 py-5">
+                        <i class="fas fa-check-circle fa-4x mb-3"></i>
+                        <h5>All Kits Packed</h5>
+                        <p>Waiting for other station to finish.</p>
+                    </div>
+                {% else %}
+                    <div class="section-header completed">
+                        {% set completed_count = activity.components | selectattr('camera', 'equalto', cam_name) | selectattr('status', 'equalto', 'completed') | list | length %}
+                        <span>Completed ({{ completed_count }})</span>
+                    </div>
+                    <div class="row g-3 mb-4">
+                        {% for part in activity.components %}
+                            {% if part.camera == cam_name and part.status == 'completed' %}
+                            <div class="col-md-6">
+                                <div class="part-card completed">
+                                    <div class="order-badge">#{{ part.sequence_order }}</div>
+                                    {% if cam_name == 'cam1' and activity.last_detected_index_cam1 == loop.index0 %}
+                                        <div class="last-detected-badge">Last Detected</div>
+                                    {% elif cam_name == 'cam2' and activity.last_detected_index_cam2 == loop.index0 %}
+                                        <div class="last-detected-badge">Last Detected</div>
                                     {% endif %}
+                                    <h5>{{ part.name }}</h5>
+                                    <div class="part-qty text-primary fw-bold">Qty: {{ part.found_quantity }} / {{ part.quantity }}</div>
                                 </div>
-                                <i class="fas fa-exclamation-circle status-icon-pending text-warning position-absolute bottom-0 end-0 m-2"></i>
                             </div>
-                        </div>
-                        {% endif %}
-                    {% endfor %}
-                </div>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                    <div class="section-header pending">
+                        {% set pending_count = activity.components | selectattr('camera', 'equalto', cam_name) | selectattr('status', '!=', 'completed') | list | length %}
+                        <span>Pending ({{ pending_count }})</span>
+                    </div>
+                    <div class="row g-3">
+                        {% for part in activity.components %}
+                            {% if part.camera == cam_name and part.status != 'completed' %}
+                            <div class="col-md-6">
+                                <div class="part-card pending">
+                                    {% if cam_name == 'cam1' and activity.last_detected_index_cam1 == loop.index0 %}
+                                        <div class="last-detected-badge">Last Detected</div>
+                                    {% elif cam_name == 'cam2' and activity.last_detected_index_cam2 == loop.index0 %}
+                                        <div class="last-detected-badge">Last Detected</div>
+                                    {% endif %}
+                                    <h5>{{ part.name }}</h5>
+                                    <div class="part-qty">
+                                        {% if part.found_quantity and part.found_quantity > 0 %}
+                                            <span class="text-primary fw-bold">Qty: {{ part.found_quantity }} / {{ part.quantity }}</span>
+                                        {% else %}
+                                            Qty: 0 / {{ part.quantity }}
+                                        {% endif %}
+                                    </div>
+                                    <i class="fas fa-exclamation-circle status-icon-pending text-warning position-absolute bottom-0 end-0 m-2"></i>
+                                </div>
+                            </div>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -206,14 +259,12 @@
     <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header bg-light">
-                <h5 class="modal-title fw-bold" id="modalTitle"><i class="fas fa-th me-2"></i> Select Kit to View Details</h5>
+                <h5 class="modal-title fw-bold" id="modalTitle"></h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body bg-light p-4">
                 <div id="grid-view">
-                    <div id="grid-loading" class="text-center py-5 d-none">
-                        <div class="spinner-border text-primary" role="status"></div>
-                    </div>
+                    <div id="grid-loading" class="text-center py-5 d-none"><div class="spinner-border text-primary"></div></div>
                     <div class="kit-grid" id="kit-grid-container"></div>
                     <div class="mt-4 d-flex gap-3 justify-content-center small text-muted">
                         <div class="d-flex align-items-center gap-1"><div class="rounded-circle bg-success" style="width:10px;height:10px;"></div> Match</div>
@@ -223,18 +274,8 @@
                     </div>
                 </div>
                 <div id="detail-view" class="d-none">
-                    <button class="btn btn-outline-secondary btn-sm mb-3" onclick="backToGrid()">
-                        <i class="fas fa-arrow-left me-1"></i> Back to Grid
-                    </button>
-                    <div id="detail-errors-section" class="mb-4 d-none">
-                        <h6 class="fw-bold text-danger border-bottom pb-2 mb-3">
-                            <i class="fas fa-exclamation-triangle me-2"></i> Anomalies / Errors
-                        </h6>
-                        <div class="row g-3" id="detail-errors-row"></div>
-                    </div>
-                    <h6 class="fw-bold text-success border-bottom pb-2 mb-3">
-                        <i class="fas fa-check-circle me-2"></i> Components Status
-                    </h6>
+                    <button class="btn btn-outline-secondary btn-sm mb-3" onclick="backToGrid()">Back</button>
+                    <div id="detail-errors-section" class="d-none mb-3"><div class="row g-3" id="detail-errors-row"></div></div>
                     <div class="row g-3" id="detail-components-row"></div>
                 </div>
             </div>
@@ -250,50 +291,112 @@
     
     let currentErrorType = null; 
     let currentErrorData = null; 
+    let currentHistoryCam = null;
+    let timers = { cam1: null, cam2: null }; // Independent timers
 
     socket.on('connect', () => { socket.emit('join_table', { table_id: TABLE_ID }); });
 
     socket.on('ui_update', (data) => {
-        // 1. PART DETECTED
+        // --- 1. ERROR (Red Screen) - GLOBAL ---
+        if (data.type === 'error_alert' || data.type === 'validation_error') {
+            // Error blocks everything. Hide other popups.
+            document.getElementById('overlay-cam1').style.display = 'none';
+            document.getElementById('overlay-cam2').style.display = 'none';
+            
+            if (data.type === 'error_alert') showRedScreen('detection', data);
+            else showRedScreen('validation', data);
+            return;
+        }
+
+        // --- 2. JOB COMPLETE - GLOBAL ---
+        if (data.type === 'job_completed') {
+            document.getElementById('overlay-cam1').style.display = 'none';
+            document.getElementById('overlay-cam2').style.display = 'none';
+            document.getElementById('job-completion-overlay').style.display = 'flex';
+            setTimeout(() => { window.location.href = "{{ url_for('kitting.index') }}"; }, 5000);
+            return;
+        }
+
+        // --- 3. INDEPENDENT EVENTS (Green/Yellow) ---
+        
+        // Identify Camera
+        const rawCam = String(data.camId || (data.popup_data ? data.popup_data.camId : '')).toLowerCase();
+        let targetCam = 'cam2'; // Default
+        if (rawCam.includes('1')) targetCam = 'cam1';
+        
+        const overlayId = `overlay-${targetCam}`;
+        const overlay = document.getElementById(overlayId);
+        
+        // Clear existing timer for this specific camera
+        if (timers[targetCam]) clearTimeout(timers[targetCam]);
+
+        // A. Detection (Green)
         if (data.type === 'refresh_needed') {
             const p = data.popup_data;
-            document.getElementById('popup-part-name').innerText = p.part_name;
-            document.getElementById('popup-qty').innerText = `Qty: ${p.found_qty} / ${p.required_qty}`;
-            document.getElementById('popup-image').src = p.imageUrl + "?t=" + new Date().getTime();
-            document.getElementById('success-popup').style.display = 'flex';
-            setTimeout(() => window.location.reload(), 2000);
+            const imgUrl = p.imageUrl + "?t=" + new Date().getTime();
+            
+            overlay.className = `side-popup theme-green`; // Apply Theme
+            overlay.style.display = 'flex';
+            
+            overlay.innerHTML = `
+                <div class="popup-img-container">
+                    <img src="${imgUrl}" alt="Detected">
+                </div>
+                <div class="d-flex align-items-center justify-content-between w-100 p-2">
+                    <div class="d-flex align-items-center gap-3">
+                        <i class="fas fa-check-circle fa-3x popup-icon"></i>
+                        <div>
+                            <h6 class="opacity-75 fw-bold text-uppercase m-0 small ls-1">Detected</h6>
+                            <h2 class="fw-bold m-0" style="font-size: 2.2rem;">${p.part_name}</h2>
+                        </div>
+                    </div>
+                    <div class="popup-badge rounded-pill px-4 py-2 fw-bold fs-4 shadow-sm">
+                        Qty: ${p.found_qty} / ${p.required_qty}
+                    </div>
+                </div>
+            `;
+            
+            // Reload page after 2 seconds to update lists
+            timers[targetCam] = setTimeout(() => window.location.reload(), 2000);
         }
-        // 2. ERRORS
-        else if (data.type === 'error_alert') showRedScreen('detection', data);
-        else if (data.type === 'validation_error') showRedScreen('validation', data);
         
-        // 3. KIT COMPLETION (Normal / Warning)
+        // B. Kit Completed (Dark Green / Yellow)
         else if (data.type === 'kit_completed' || data.type === 'kit_completed_with_warning') {
-            document.getElementById('kit-error-overlay').style.display = 'none';
-            if (data.type === 'kit_completed_with_warning') {
-                const list = document.getElementById('warning-list');
-                list.innerHTML = "";
-                (data.overcount_list || []).forEach(name => list.innerHTML += `<li>${name}</li>`);
-                document.getElementById('kit-warning-overlay').style.display = 'flex';
-            } else {
-                document.getElementById('completed-kit-num').innerText = "#" + data.completed_count;
-                document.getElementById('kit-completion-overlay').style.display = 'flex';
+            document.getElementById('kit-error-overlay').style.display = 'none'; // Ensure error is gone
+            
+            const isWarning = (data.type === 'kit_completed_with_warning');
+            const themeClass = isWarning ? 'theme-yellow' : 'theme-dark-green';
+            const iconClass = isWarning ? 'fa-exclamation-triangle' : 'fa-box-open';
+            const titleText = isWarning ? 'OVERCOUNT DETECTED' : 'KIT COMPLETED';
+            
+            overlay.className = `side-popup ${themeClass}`;
+            overlay.style.display = 'flex';
+            
+            // Build Content
+            let contentHtml = `
+                <div class="d-flex flex-column align-items-center justify-content-center h-100">
+                    <i class="fas ${iconClass} fa-6x mb-4 popup-icon"></i>
+                    <h1 class="fw-bold display-4 text-center">${titleText}</h1>
+                    <h3 class="opacity-75 text-uppercase">Kit #${data.completed_count}</h3>
+            `;
+            
+            if (isWarning && data.overcount_list) {
+                contentHtml += `<div class="mt-4 bg-white text-dark p-3 rounded shadow-sm text-start" style="min-width: 300px;">
+                                    <h6 class="border-bottom pb-2 mb-2 fw-bold text-warning">Extra Parts:</h6>
+                                    <ul class="mb-0 ps-3">`;
+                data.overcount_list.forEach(item => { contentHtml += `<li>${item}</li>`; });
+                contentHtml += `</ul></div>`;
             }
-            setTimeout(() => window.location.reload(), 4000);
-        }
-        
-        // 4. JOB COMPLETION (NEW: FIX FOR LAST KIT)
-        else if (data.type === 'job_completed') {
-            document.getElementById('kit-error-overlay').style.display = 'none';
-            document.getElementById('job-completion-overlay').style.display = 'flex';
-            // Wait 5 seconds, then go back to Main List
-            setTimeout(() => {
-                window.location.href = "{{ url_for('kitting.index') }}";
-            }, 5000);
+            
+            contentHtml += `</div>`;
+            overlay.innerHTML = contentHtml;
+
+            // Reload page after 4 seconds
+            timers[targetCam] = setTimeout(() => window.location.reload(), 4000);
         }
     });
 
-    // ... (Keep existing Red Screen Logic) ...
+    // --- HELPER FUNCTIONS ---
     function showRedScreen(type, data) {
         currentErrorType = type; currentErrorData = data; 
         const overlay = document.getElementById('kit-error-overlay');
@@ -320,30 +423,27 @@
         if (!reason) { alert("Please select a reason."); return; }
         try {
             await fetch(`/kitting/api/${TABLE_ID}/resolve_error`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ error_type: currentErrorType, reason: reason, error_details: currentErrorData })
             });
             document.getElementById('kit-error-overlay').style.display = 'none';
         } catch (e) { console.error(e); alert("Error submitting resolution."); }
     }
 
-    // --- GRID LOGIC ---
-    function openHistoryGrid() {
+    function openHistoryGrid(camId) {
+        currentHistoryCam = camId;
         document.getElementById('grid-view').classList.remove('d-none');
         document.getElementById('detail-view').classList.add('d-none');
-        document.getElementById('modalTitle').innerHTML = '<i class="fas fa-th me-2"></i> Select Kit to View Details';
-        const modal = new bootstrap.Modal(document.getElementById('historyGridModal'));
-        modal.show();
-        fetchGridData();
+        document.getElementById('modalTitle').innerHTML = `<i class="fas fa-history me-2"></i> History for ${camId.toUpperCase()}`;
+        new bootstrap.Modal(document.getElementById('historyGridModal')).show();
+        fetchGridData(camId);
     }
-
-    async function fetchGridData() {
+    async function fetchGridData(camId) {
         const loader = document.getElementById('grid-loading');
         const container = document.getElementById('kit-grid-container');
         container.innerHTML = ''; loader.classList.remove('d-none');
         try {
-            const res = await fetch(`/kitting/api/history_summary/${ACT_ID}`);
+            const res = await fetch(`/kitting/api/history_summary/${ACT_ID}/${camId}`);
             const data = await res.json();
             loader.classList.add('d-none');
             if (data.status === 'success') {
@@ -358,55 +458,39 @@
             }
         } catch(e) { console.error(e); loader.classList.add('d-none'); }
     }
-
     function backToGrid() {
         document.getElementById('detail-view').classList.add('d-none');
         document.getElementById('grid-view').classList.remove('d-none');
-        document.getElementById('modalTitle').innerHTML = '<i class="fas fa-th me-2"></i> Select Kit to View Details';
     }
-
     async function loadKitDetails(kitNum) {
         document.getElementById('grid-view').classList.add('d-none');
         document.getElementById('detail-view').classList.remove('d-none');
-        document.getElementById('modalTitle').innerHTML = `<i class="fas fa-box-open me-2"></i> Details for Kit #${kitNum}`;
-        
+        const res = await fetch(`/kitting/api/history/${ACT_ID}/${currentHistoryCam}/${kitNum}`);
+        const data = await res.json();
         const compRow = document.getElementById('detail-components-row');
         const errRow = document.getElementById('detail-errors-row');
         const errSection = document.getElementById('detail-errors-section');
-        compRow.innerHTML = '<div class="text-center w-100"><div class="spinner-border text-primary"></div></div>';
-        errRow.innerHTML = '';
-
-        try {
-            const res = await fetch(`/kitting/api/history/${ACT_ID}/${kitNum}`);
-            const data = await res.json();
-            compRow.innerHTML = ''; 
-
-            if(data.status === 'success') {
-                data.components.forEach(part => {
-                    let statusClass = 'border-success'; 
-                    let bgClass = 'bg-white';
-                    if (part.found_quantity == 0) { statusClass = 'border-danger'; bgClass = 'bg-danger-subtle'; }
-                    else if (part.found_quantity != part.quantity) { statusClass = 'border-warning border-2'; bgClass = 'bg-warning-subtle'; }
-                    if (part.resolution_type === 'validation_override') statusClass = 'border-warning'; 
-
-                    let html = `<div class="col-md-3"><div class="p-3 rounded border ${statusClass} ${bgClass} h-100"><div class="small fw-bold text-muted mb-1">${part.sku || 'PART'}</div><h6 class="fw-bold mb-2">${part.name}</h6><div class="d-flex justify-content-between align-items-end"><span class="badge ${part.found_quantity >= part.quantity ? 'bg-success' : (part.found_quantity==0 ? 'bg-danger' : 'bg-warning text-dark')}">${part.found_quantity} / ${part.quantity}</span>`;
-                    if(part.last_image_url) html += `<a href="${part.last_image_url}" target="_blank" class="btn btn-sm btn-light py-0 px-1"><i class="fas fa-image"></i></a>`;
-                    html += `</div></div></div>`;
-                    compRow.innerHTML += html;
+        compRow.innerHTML = ''; errRow.innerHTML = '';
+        if(data.status === 'success') {
+            data.components.forEach(part => {
+                let statusClass = 'border-success', bgClass = 'bg-white';
+                if (part.found_quantity == 0) { statusClass = 'border-danger'; bgClass = 'bg-danger-subtle'; }
+                else if (part.found_quantity != part.quantity) { statusClass = 'border-warning border-2'; bgClass = 'bg-warning-subtle'; }
+                if (part.resolution_type === 'validation_override') statusClass = 'border-warning'; 
+                let html = `<div class="col-md-3"><div class="p-3 rounded border ${statusClass} ${bgClass} h-100"><div class="small fw-bold text-muted mb-1">${part.sku || 'PART'}</div><h6 class="fw-bold mb-2">${part.name}</h6><div class="d-flex justify-content-between align-items-end"><span class="badge ${part.found_quantity >= part.quantity ? 'bg-success' : (part.found_quantity==0 ? 'bg-danger' : 'bg-warning text-dark')}">${part.found_quantity} / ${part.quantity}</span>`;
+                if(part.last_image_url) html += `<a href="${part.last_image_url}" target="_blank" class="btn btn-sm btn-light py-0 px-1"><i class="fas fa-image"></i></a>`;
+                html += `</div></div></div>`;
+                compRow.innerHTML += html;
+            });
+            if(data.errors && data.errors.length > 0) {
+                errSection.classList.remove('d-none');
+                data.errors.forEach(err => {
+                    const details = err.error_details || {};
+                    const img = details.imageUrl ? `<img src="${details.imageUrl}" class="rounded mt-2" style="height:60px">` : '';
+                    errRow.innerHTML += `<div class="col-md-4"><div class="p-3 rounded border border-danger bg-danger-subtle"><div class="badge bg-danger mb-2">ERROR</div><h6 class="fw-bold text-danger">${details.detectedPart || 'Issue'}</h6><div class="small text-muted"><strong>Reason:</strong> ${err.reason_selected}</div>${img}</div></div>`;
                 });
-
-                if(data.errors && data.errors.length > 0) {
-                    errSection.classList.remove('d-none');
-                    data.errors.forEach(err => {
-                        if(err.error_type === 'detection') {
-                            const details = err.error_details || {};
-                            const img = details.imageUrl ? `<img src="${details.imageUrl}" class="rounded mt-2" style="height:60px">` : '';
-                            errRow.innerHTML += `<div class="col-md-4"><div class="p-3 rounded border border-danger bg-danger-subtle"><div class="badge bg-danger mb-2">WRONG PART</div><h6 class="fw-bold text-danger">${details.detectedPart || 'Unknown'}</h6><div class="small text-muted"><strong>Reason:</strong> ${err.reason_selected}</div>${img}</div></div>`;
-                        }
-                    });
-                } else { errSection.classList.add('d-none'); }
-            }
-        } catch(e) { console.error(e); }
+            } else { errSection.classList.add('d-none'); }
+        }
     }
 </script>
 {% endblock %}
