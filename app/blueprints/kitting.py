@@ -209,10 +209,49 @@ def perform_camera_completion(activity, db, table_id, cam_id, warning_type=None)
             "camId": cam_id,
             "completed_count": current_index
         }, to=f"table_{table_id}")
+        
+@kitting_bp.route('/api/<table_id>/status', methods=['GET'])
+def check_table_status(table_id):
+    """
+    AI Script calls this every 2s.
+    Returns 'locked' if Red Screen is active, 'active' if safe to proceed.
+    """
+    db = get_db()
+    activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
+    
+    if not activity:
+        return jsonify({"status": "idle", "message": "No active job"}), 200
 
+    # Check if ANY camera has blocking errors
+    errors_c1 = activity.get('current_kit_errors_cam1', [])
+    errors_c2 = activity.get('current_kit_errors_cam2', [])
+    
+    if errors_c1 or errors_c2:
+        return jsonify({
+            "status": "locked", 
+            "message": "Red Screen Active - Waiting for operator resolution",
+            "errors": {
+                "cam1": len(errors_c1),
+                "cam2": len(errors_c2)
+            }
+        }), 200
+        
+    return jsonify({"status": "active", "message": "System ready"}), 200
+
+# --- DETECTION API (UPDATED WITH LOCK) ---
 @kitting_bp.route('/api/<table_id>/detection', methods=['POST'])
 def update_detection(table_id):
     db = get_db()
+    
+    # 1. Fetch Activity
+    activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
+    if not activity: return jsonify({"message": "No active job"}), 404
+
+    # 2. Global Lock Check
+    if activity.get('current_kit_errors_cam1') or activity.get('current_kit_errors_cam2'):
+        return jsonify({"message": "System Locked", "code": "system_locked"}), 423
+
+    # 3. Process Image
     if 'image' not in request.files: return jsonify({"message": "No image"}), 422
     file = request.files['image']
     raw_payload = request.form.get('payload')
@@ -221,40 +260,59 @@ def update_detection(table_id):
     cam_id = str(data.get('camId', '')).lower() 
     detected_part = data.get('detectedPart', '')
     
-    activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
-    if not activity: return jsonify({"message": "No active job"}), 404
-    
     current_kit_num = activity.get(f'current_kit_index_{cam_id}', 1)
     total_kits = activity.get('total_kits_to_pack', 1)
 
-    # FIX: Block detection if camera is already done
     if current_kit_num > total_kits:
         return jsonify({"message": "camera-job-completed", "code": "done"}), 200
     
     activity_id = str(activity['_id'])
     filename = secure_filename(f"{activity_id}_{cam_id}_kit{current_kit_num}_{detected_part}_{int(datetime.utcnow().timestamp())}.jpg")
     file.save(os.path.join(Config.UPLOAD_FOLDER, filename))
-    
-    # FIX: Use relative URL (remove _external=True) to avoid localhost issues on tablet
     image_url = url_for('kitting.get_image', filename=filename) 
 
     current_components = activity.get('components', [])
     target_index = -1
     target_part = None
 
+    # Logic: Hungry Slot
     for idx, part in enumerate(current_components):
         if str(part.get('camera')).lower() == cam_id:
             if str(part.get('name')) == str(detected_part):
                 if part.get('found_quantity', 0) < part.get('quantity', 1):
                     target_part = part; target_index = idx; break
     
+    # Logic: Overcount Slot
     if not target_part:
         for idx, part in enumerate(current_components):
             if str(part.get('camera')).lower() == cam_id:
                 if str(part.get('name')) == str(detected_part):
                     target_part = part; target_index = idx; break
 
+    # --- WRONG PART LOGIC (UPDATED) ---
     if not target_part:
+        # 1. Create Error Object
+        error_data = {
+            "error_type": "detection",
+            "reason_selected": None, # Pending resolution
+            "timestamp": datetime.utcnow(),
+            "error_details": {
+                "message": "wrong_part_detected",
+                "imageUrl": image_url,
+                "detectedPart": detected_part,
+                "error_code": "wrong-part",
+                "camId": cam_id 
+            }
+        }
+        
+        # 2. SAVE TO DB IMMEDIATELY (This fixes the refresh/new client issue)
+        error_key = f"current_kit_errors_{cam_id}"
+        db.activities.update_one(
+            {"_id": activity['_id']}, 
+            {"$push": {error_key: error_data}}
+        )
+
+        # 3. Emit Socket Event
         socketio.emit('ui_update', {
             "type": "error_alert",
             "message": "wrong_part_detected",
@@ -263,11 +321,12 @@ def update_detection(table_id):
             "error_code": "wrong-part",
             "camId": cam_id 
         }, to=f"table_{table_id}")
+        
         return jsonify({"message": "wrong_part", "code": "wrong-part"}), 409
 
+    # --- CORRECT PART LOGIC ---
     new_found = target_part.get('found_quantity', 0) + 1
     required_qty = target_part.get('quantity', 1)
-    
     last_detected_key = f"last_detected_index_{cam_id}" 
     
     update_field = f"components.{target_index}"
@@ -299,15 +358,21 @@ def update_detection(table_id):
 
     return jsonify({"message": "correct-part-detected", "found": new_found}), 200
 
+# --- VALIDATION API (UPDATED WITH LOCK) ---
 @kitting_bp.route('/api/<table_id>/validate_cycle', methods=['POST'])
 def validate_cycle(table_id):
     db = get_db()
     data = request.json
-    cam_id = str(data.get('camId', '')).lower() 
     
     activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
     if not activity: return jsonify({"message": "No active job"}), 404
     
+    # --- NEW: GLOBAL LOCK CHECK ---
+    if activity.get('current_kit_errors_cam1') or activity.get('current_kit_errors_cam2'):
+        return jsonify({"message": "System Locked: Resolve Red Screen first"}), 423
+
+    # ... (Rest of validation logic remains the same) ...
+    cam_id = str(data.get('camId', '')).lower() 
     components = activity.get('components', [])
     missing = []; undercount = []; overcount = []
 
@@ -316,7 +381,6 @@ def validate_cycle(table_id):
             name = part.get('name')
             req = part.get('quantity', 0)
             found = part.get('found_quantity', 0)
-            
             if found == 0 and req > 0 and part.get('alert_missing'): missing.append(name)
             elif found > 0 and found < req and part.get('alert_undercount'): undercount.append(name)
             elif found > req and part.get('alert_overcount'): overcount.append(name)
@@ -336,50 +400,61 @@ def validate_cycle(table_id):
 def resolve_error(table_id):
     db = get_db()
     data = request.json
-    error_type = data.get('error_type') 
-    reason = data.get('reason')
-    error_details = data.get('error_details', {})
-    cam_id = str(error_details.get('camId', 'cam1')).lower() 
     
     activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
     if not activity: return jsonify({"message": "No active job"}), 404
 
+    # Determine cam_id
+    error_details = data.get('error_details', {})
+    cam_id = str(error_details.get('camId', '')).lower()
+    if not cam_id:
+        if activity.get('current_kit_errors_cam1'): cam_id = 'cam1'
+        elif activity.get('current_kit_errors_cam2'): cam_id = 'cam2'
+        else: cam_id = 'cam1'
+
+    error_key = f"current_kit_errors_{cam_id}"
+    
+    # 1. Log to History
     log_doc = {
         "activity_id": activity['_id'],
         "kit_number": activity.get(f'current_kit_index_{cam_id}', 1),
         "camera_id": cam_id,
         "table_id": table_id,
         "timestamp": datetime.utcnow(),
-        "error_type": error_type,
-        "reason_selected": reason,
+        "error_type": data.get('error_type'),
+        "reason_selected": data.get('reason'),
         "error_details": error_details 
     }
     db.error_logs.insert_one(log_doc)
-    
-    clean_log = log_doc.copy()
-    if '_id' in clean_log: clean_log['_id'] = str(clean_log['_id'])
-    if 'activity_id' in clean_log: clean_log['activity_id'] = str(clean_log['activity_id'])
 
-    error_key = f"current_kit_errors_{cam_id}"
-    db.activities.update_one({"_id": activity['_id']}, {"$push": {error_key: clean_log}})
+    # 2. CLEAR the blocking error
+    db.activities.update_one(
+        {"_id": activity['_id']}, 
+        {"$set": {error_key: []}}
+    )
 
-    if error_type == 'validation':
+    # 3. Handle Validation Override
+    if data.get('error_type') == 'validation':
         components = activity.get('components', [])
         problems = set((error_details.get('missing') or []) + (error_details.get('undercount') or []))
         for idx, part in enumerate(components):
             if str(part.get('camera')).lower() == cam_id and part.get('name') in problems:
                 key = f"components.{idx}"
                 db.activities.update_one({"_id": activity['_id']}, {"$set": {
-                    f"{key}.resolution_reason": reason,
+                    f"{key}.resolution_reason": data.get('reason'),
                     f"{key}.resolution_type": "validation_override"
                 }})
-
-    updated_act = db.activities.find_one({"_id": activity['_id']})
-    if error_type == 'validation':
+        
+        updated_act = db.activities.find_one({"_id": activity['_id']})
         perform_camera_completion(updated_act, db, table_id, cam_id)
-        return jsonify({"status": "success", "action": "kit_finished"})
-    else:
-        return jsonify({"status": "success", "action": "continue"})
+
+    # --- NEW: BROADCAST RESOLUTION TO ALL CLIENTS ---
+    socketio.emit('ui_update', {
+        "type": "error_resolved",
+        "camId": cam_id
+    }, to=f"table_{table_id}")
+
+    return jsonify({"status": "success", "action": "resolved"})
 
 @kitting_bp.route('/api/history_summary/<activity_id>/<cam_id>')
 def get_history_summary(activity_id, cam_id):

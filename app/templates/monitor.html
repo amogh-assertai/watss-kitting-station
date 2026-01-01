@@ -283,6 +283,7 @@
     </div>
 </div>
 
+
 <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
 <script>
     const TABLE_ID = "{{ activity.table_id }}";
@@ -292,111 +293,86 @@
     let currentErrorType = null; 
     let currentErrorData = null; 
     let currentHistoryCam = null;
-    let timers = { cam1: null, cam2: null }; // Independent timers
+    let timers = { cam1: null, cam2: null }; 
+    let pendingReloadTimer = null; 
+
+    // --- 1. HELPER: RESET OVERLAYS ---
+    function resetOverlays() {
+        if (pendingReloadTimer) { clearTimeout(pendingReloadTimer); pendingReloadTimer = null; }
+        if (timers.cam1) { clearTimeout(timers.cam1); timers.cam1 = null; }
+        if (timers.cam2) { clearTimeout(timers.cam2); timers.cam2 = null; }
+
+        const ids = ['overlay-cam1', 'overlay-cam2', 'kit-error-overlay', 'job-completion-overlay'];
+        ids.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        });
+    }
 
     socket.on('connect', () => { socket.emit('join_table', { table_id: TABLE_ID }); });
 
     socket.on('ui_update', (data) => {
-        // --- 1. ERROR (Red Screen) - GLOBAL ---
+        // --- HANDLE RESOLUTION ---
+        if (data.type === 'error_resolved') {
+            console.log("✅ Error Resolved by another client. Syncing...");
+            resetOverlays();
+            window.location.reload(); 
+            return;
+        }
+
+        // --- ERROR (Red Screen) ---
         if (data.type === 'error_alert' || data.type === 'validation_error') {
-            // Error blocks everything. Hide other popups.
-            document.getElementById('overlay-cam1').style.display = 'none';
-            document.getElementById('overlay-cam2').style.display = 'none';
-            
+            resetOverlays();
             if (data.type === 'error_alert') showRedScreen('detection', data);
             else showRedScreen('validation', data);
             return;
         }
 
-        // --- 2. JOB COMPLETE - GLOBAL ---
+        // --- JOB COMPLETE ---
         if (data.type === 'job_completed') {
-            document.getElementById('overlay-cam1').style.display = 'none';
-            document.getElementById('overlay-cam2').style.display = 'none';
+            resetOverlays();
             document.getElementById('job-completion-overlay').style.display = 'flex';
             setTimeout(() => { window.location.href = "{{ url_for('kitting.index') }}"; }, 5000);
             return;
         }
 
-        // --- 3. INDEPENDENT EVENTS (Green/Yellow) ---
-        
-        // Identify Camera
+        // --- INDEPENDENT EVENTS ---
         const rawCam = String(data.camId || (data.popup_data ? data.popup_data.camId : '')).toLowerCase();
-        let targetCam = 'cam2'; // Default
+        let targetCam = 'cam2'; 
         if (rawCam.includes('1')) targetCam = 'cam1';
         
         const overlayId = `overlay-${targetCam}`;
         const overlay = document.getElementById(overlayId);
-        
-        // Clear existing timer for this specific camera
         if (timers[targetCam]) clearTimeout(timers[targetCam]);
 
-        // A. Detection (Green)
         if (data.type === 'refresh_needed') {
             const p = data.popup_data;
             const imgUrl = p.imageUrl + "?t=" + new Date().getTime();
-            
-            overlay.className = `side-popup theme-green`; // Apply Theme
+            overlay.className = `side-popup theme-green`; 
             overlay.style.display = 'flex';
-            
-            overlay.innerHTML = `
-                <div class="popup-img-container">
-                    <img src="${imgUrl}" alt="Detected">
-                </div>
-                <div class="d-flex align-items-center justify-content-between w-100 p-2">
-                    <div class="d-flex align-items-center gap-3">
-                        <i class="fas fa-check-circle fa-3x popup-icon"></i>
-                        <div>
-                            <h6 class="opacity-75 fw-bold text-uppercase m-0 small ls-1">Detected</h6>
-                            <h2 class="fw-bold m-0" style="font-size: 2.2rem;">${p.part_name}</h2>
-                        </div>
-                    </div>
-                    <div class="popup-badge rounded-pill px-4 py-2 fw-bold fs-4 shadow-sm">
-                        Qty: ${p.found_qty} / ${p.required_qty}
-                    </div>
-                </div>
-            `;
-            
-            // Reload page after 2 seconds to update lists
+            overlay.innerHTML = `<div class="popup-img-container"><img src="${imgUrl}" alt="Detected"></div><div class="d-flex align-items-center justify-content-between w-100 p-2"><div class="d-flex align-items-center gap-3"><i class="fas fa-check-circle fa-3x popup-icon"></i><div><h6 class="opacity-75 fw-bold text-uppercase m-0 small ls-1">Detected</h6><h2 class="fw-bold m-0" style="font-size: 2.2rem;">${p.part_name}</h2></div></div><div class="popup-badge rounded-pill px-4 py-2 fw-bold fs-4 shadow-sm">Qty: ${p.found_qty} / ${p.required_qty}</div></div>`;
             timers[targetCam] = setTimeout(() => window.location.reload(), 2000);
         }
-        
-        // B. Kit Completed (Dark Green / Yellow)
         else if (data.type === 'kit_completed' || data.type === 'kit_completed_with_warning') {
-            document.getElementById('kit-error-overlay').style.display = 'none'; // Ensure error is gone
-            
             const isWarning = (data.type === 'kit_completed_with_warning');
             const themeClass = isWarning ? 'theme-yellow' : 'theme-dark-green';
             const iconClass = isWarning ? 'fa-exclamation-triangle' : 'fa-box-open';
             const titleText = isWarning ? 'OVERCOUNT DETECTED' : 'KIT COMPLETED';
-            
             overlay.className = `side-popup ${themeClass}`;
             overlay.style.display = 'flex';
-            
-            // Build Content
-            let contentHtml = `
-                <div class="d-flex flex-column align-items-center justify-content-center h-100">
-                    <i class="fas ${iconClass} fa-6x mb-4 popup-icon"></i>
-                    <h1 class="fw-bold display-4 text-center">${titleText}</h1>
-                    <h3 class="opacity-75 text-uppercase">Kit #${data.completed_count}</h3>
-            `;
-            
+            let contentHtml = `<div class="d-flex flex-column align-items-center justify-content-center h-100"><i class="fas ${iconClass} fa-6x mb-4 popup-icon"></i><h1 class="fw-bold display-4 text-center">${titleText}</h1><h3 class="opacity-75 text-uppercase">Kit #${data.completed_count}</h3>`;
             if (isWarning && data.overcount_list) {
-                contentHtml += `<div class="mt-4 bg-white text-dark p-3 rounded shadow-sm text-start" style="min-width: 300px;">
-                                    <h6 class="border-bottom pb-2 mb-2 fw-bold text-warning">Extra Parts:</h6>
-                                    <ul class="mb-0 ps-3">`;
+                contentHtml += `<div class="mt-4 bg-white text-dark p-3 rounded shadow-sm text-start" style="min-width: 300px;"><h6 class="border-bottom pb-2 mb-2 fw-bold text-warning">Extra Parts:</h6><ul class="mb-0 ps-3">`;
                 data.overcount_list.forEach(item => { contentHtml += `<li>${item}</li>`; });
                 contentHtml += `</ul></div>`;
             }
-            
             contentHtml += `</div>`;
             overlay.innerHTML = contentHtml;
-
-            // Reload page after 4 seconds
             timers[targetCam] = setTimeout(() => window.location.reload(), 4000);
         }
     });
 
-    // --- HELPER FUNCTIONS ---
+    // ... (Keep showRedScreen, submitResolution, History functions) ...
     function showRedScreen(type, data) {
         currentErrorType = type; currentErrorData = data; 
         const overlay = document.getElementById('kit-error-overlay');
@@ -418,15 +394,20 @@
             ["Packed Partial (Authorized)", "Inventory Issue", "System Error (Force Finish)"].forEach(r => select.innerHTML += `<option value="${r}">${r}</option>`);
         }
     }
+
     async function submitResolution() {
         const reason = document.getElementById('err-reason').value;
         if (!reason) { alert("Please select a reason."); return; }
+        
+        if (!currentErrorData.camId) { currentErrorData.camId = 'cam1'; }
+
         try {
             await fetch(`/kitting/api/${TABLE_ID}/resolve_error`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ error_type: currentErrorType, reason: reason, error_details: currentErrorData })
             });
             document.getElementById('kit-error-overlay').style.display = 'none';
+            // DO NOT RELOAD HERE. Wait for socket 'error_resolved' event.
         } catch (e) { console.error(e); alert("Error submitting resolution."); }
     }
 
@@ -492,5 +473,28 @@
             } else { errSection.classList.add('d-none'); }
         }
     }
+
+    // --- STATE HYDRATION (Run on Page Load) ---
+    (function checkInitialState() {
+        console.log("🔄 Checking initial state from DB...");
+        
+        const errorsC1 = {{ (activity.current_kit_errors_cam1 or []) | tojson }};
+        const errorsC2 = {{ (activity.current_kit_errors_cam2 or []) | tojson }};
+        
+        let activeError = null;
+        if (errorsC1 && errorsC1.length > 0) { activeError = errorsC1[errorsC1.length - 1]; } 
+        else if (errorsC2 && errorsC2.length > 0) { activeError = errorsC2[errorsC2.length - 1]; }
+
+        if (activeError) {
+            console.warn("⚠️ Active Error Found on Load:", activeError);
+            resetOverlays();
+            
+            if (activeError.error_type === 'detection') {
+                showRedScreen('detection', activeError.error_details);
+            } else if (activeError.error_type === 'validation') {
+                showRedScreen('validation', activeError.error_details);
+            }
+        }
+    })();
 </script>
 {% endblock %}
