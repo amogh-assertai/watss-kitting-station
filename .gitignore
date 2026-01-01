@@ -1,0 +1,9 @@
+app/static/captures/*
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Optional: Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.cache/

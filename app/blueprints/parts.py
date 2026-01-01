@@ -10,7 +10,6 @@ def list_kits():
     """Lists all created kits."""
     try:
         db = get_db()
-        # Fetch all kits, sorted by newest first
         kits = list(db.kits.find().sort("created_at", -1))
         return render_template('parts_list.html', kits=kits)
     except Exception as e:
@@ -32,7 +31,6 @@ def edit_kit_form(kit_id):
             flash("Kit not found.", "warning")
             return redirect(url_for('parts.list_kits'))
         
-        # Convert ObjectId to string for the template
         kit['id'] = str(kit['_id'])
         return render_template('parts_form.html', kit=kit)
     except Exception as e:
@@ -46,26 +44,25 @@ def save_kit():
         data = request.json
         db = get_db()
 
-        # Validate basic fields
         if not data.get('kit_name') or not data.get('edp_number'):
             return jsonify({'status': 'error', 'message': 'Kit Name and EDP Number are required.'}), 400
 
+        # The 'parts' list now contains objects with:
+        # { name: "...", quantity: 1, camera: "...", alert_missing: true/false, ... }
         kit_doc = {
             "kit_name": data['kit_name'],
             "edp_number": data['edp_number'],
-            "parts": data.get('parts', []), # List of part objects
+            "parts": data.get('parts', []), 
             "updated_at": datetime.utcnow()
         }
 
         if data.get('kit_id'):
-            # Update existing kit
             db.kits.update_one(
                 {"_id": ObjectId(data['kit_id'])},
                 {"$set": kit_doc}
             )
             message = "Kit updated successfully!"
         else:
-            # Create new kit
             kit_doc["created_at"] = datetime.utcnow()
             db.kits.insert_one(kit_doc)
             message = "Kit created successfully!"

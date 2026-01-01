@@ -75,16 +75,23 @@
     function addPartRow(data = null) {
         document.getElementById('emptyState').style.display = 'none';
         const tbody = document.getElementById('partsBody');
-        const rowId = Date.now(); // Unique ID for checkbox grouping
+        const rowId = Date.now() + Math.floor(Math.random() * 1000); 
 
-        const row = document.createElement('tr');
-        
         // Default values
         const name = data ? data.name : '';
         const qty = data ? data.quantity : 1;
         const cam = data ? data.camera : 'cam1';
-        const alerts = data ? data.alerts : [];
+        
+        // --- LOGIC CHANGE: Handle Boolean Flags ---
+        // 1. Check if 'alert_missing' boolean exists (New Format)
+        // 2. Fallback: Check if 'missing' is in 'alerts' array (Old Format)
+        // 3. Default: false
+        
+        const isMissing = data ? (data.alert_missing === true || (data.alerts && data.alerts.includes('missing'))) : false;
+        const isUndercount = data ? (data.alert_undercount === true || (data.alerts && data.alerts.includes('undercount'))) : false;
+        const isOvercount = data ? (data.alert_overcount === true || (data.alerts && data.alerts.includes('overcount'))) : false;
 
+        const row = document.createElement('tr');
         row.innerHTML = `
             <td>
                 <input type="text" class="form-control part-name" placeholder="Part Name" value="${name}">
@@ -101,15 +108,15 @@
             <td>
                 <div class="d-flex flex-column gap-1">
                     <div class="form-check">
-                        <input class="form-check-input part-alert" type="checkbox" value="missing" id="miss_${rowId}" ${alerts.includes('missing') ? 'checked' : ''}>
+                        <input class="form-check-input part-alert-missing" type="checkbox" id="miss_${rowId}" ${isMissing ? 'checked' : ''}>
                         <label class="form-check-label text-danger" for="miss_${rowId}">Alert if Missing</label>
                     </div>
                     <div class="form-check">
-                        <input class="form-check-input part-alert" type="checkbox" value="undercount" id="under_${rowId}" ${alerts.includes('undercount') ? 'checked' : ''}>
+                        <input class="form-check-input part-alert-undercount" type="checkbox" id="under_${rowId}" ${isUndercount ? 'checked' : ''}>
                         <label class="form-check-label text-warning" for="under_${rowId}">Alert if Undercount</label>
                     </div>
                     <div class="form-check">
-                        <input class="form-check-input part-alert" type="checkbox" value="overcount" id="over_${rowId}" ${alerts.includes('overcount') ? 'checked' : ''}>
+                        <input class="form-check-input part-alert-overcount" type="checkbox" id="over_${rowId}" ${isOvercount ? 'checked' : ''}>
                         <label class="form-check-label text-info" for="over_${rowId}">Alert if Overcount</label>
                     </div>
                 </div>
@@ -150,9 +157,10 @@
             const qty = row.querySelector('.part-qty').value;
             const cam = row.querySelector('.part-cam').value;
             
-            // Get checked alerts
-            const alertChecks = row.querySelectorAll('.part-alert:checked');
-            let alerts = Array.from(alertChecks).map(cb => cb.value);
+            // --- LOGIC CHANGE: Grab Checkboxes directly as Booleans ---
+            const alertMissing = row.querySelector('.part-alert-missing').checked;
+            const alertUndercount = row.querySelector('.part-alert-undercount').checked;
+            const alertOvercount = row.querySelector('.part-alert-overcount').checked;
 
             if(!name) {
                 alert("All parts must have a name.");
@@ -163,7 +171,10 @@
                 name: name,
                 quantity: parseInt(qty),
                 camera: cam,
-                alerts: alerts
+                // Saving explicit booleans to DB
+                alert_missing: alertMissing,
+                alert_undercount: alertUndercount,
+                alert_overcount: alertOvercount
             });
         }
 

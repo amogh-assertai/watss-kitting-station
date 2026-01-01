@@ -15,21 +15,44 @@
     .section-header { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; display: flex; justify-content: space-between; }
     .section-header.completed { background-color: var(--completed-header-bg); color: var(--completed-header-text); border: 1px solid #a7f3d0; }
     .section-header.pending { background-color: var(--pending-header-bg); color: var(--pending-header-text); border: 1px solid #c7d2fe; }
-    
     .part-card { background: white; border-radius: 8px; padding: 15px; position: relative; box-shadow: 0 1px 2px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; min-height: 90px; }
     .part-card.pending { border-left: 5px solid var(--pending-border); }
     .part-card.completed { background-color: var(--completed-bg); border: 1px solid var(--completed-border); border-left: 5px solid var(--completed-border); }
-    
     .order-badge { position: absolute; top: 0; left: 0; background: var(--completed-border); color: white; font-size: 0.75rem; font-weight: 800; padding: 2px 8px; border-bottom-right-radius: 8px; }
-    
-    /* Last Detected Badge */
     .last-detected-badge { position: absolute; bottom: 0; right: 0; background: #32325d; color: white; font-size: 0.65rem; font-weight: bold; text-transform: uppercase; padding: 3px 10px; border-top-left-radius: 8px; animation: flashBadge 1s infinite alternate; }
     @keyframes flashBadge { from { opacity: 0.8; } to { opacity: 1; } }
 
-    /* POPUP */
-    #success-popup { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(16, 185, 129, 0.92); z-index: 9999; color: white; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    /* --- OVERLAYS --- */
+    #success-popup, #kit-completion-overlay, #kit-warning-overlay, #kit-error-overlay, #job-completion-overlay { 
+        display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 9999; 
+        flex-direction: column; align-items: center; justify-content: center; text-align: center; 
+    }
+    
+    #success-popup { background-color: rgba(16, 185, 129, 0.92); color: white; }
+    #kit-completion-overlay { background-color: #064e3b; color: white; z-index: 10000; }
+    #kit-warning-overlay { background-color: #f59e0b; color: white; z-index: 10001; }
+    #kit-error-overlay { background-color: rgba(220, 38, 38, 0.98); color: white; z-index: 10002; }
+    
+    /* NEW: JOB COMPLETED OVERLAY (Blue/Gold) */
+    #job-completion-overlay { background-color: #1e3a8a; color: white; z-index: 10005; }
+
     .success-content { background: white; color: #333; padding: 30px; border-radius: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); max-width: 450px; width: 90%; }
+    .error-card { background: white; color: #333; padding: 30px; border-radius: 12px; box-shadow: 0 25px 50px rgba(0,0,0,0.5); max-width: 600px; width: 90%; text-align: left; }
+    .reason-select { border: 2px solid #dc2626; padding: 10px; font-size: 1.1rem; border-radius: 8px; width: 100%; margin-bottom: 20px; }
+    .blink-active { animation: blinker 1s linear infinite; }
+    @keyframes blinker { 50% { opacity: 0.3; } }
     .h-100-card { height: 100%; min-height: 70vh; }
+
+    /* --- GRID STYLES --- */
+    .kit-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 15px; padding: 10px; }
+    .kit-cell { aspect-ratio: 1; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.2rem; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; border: 2px solid transparent; color: white; }
+    .kit-cell:hover { transform: scale(1.1); box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+    .kit-green { background-color: #10b981; border-color: #059669; }
+    .kit-yellow { background-color: #f59e0b; border-color: #d97706; }
+    .kit-red { background-color: #ef4444; border-color: #b91c1c; }
+    .kit-blue { background-color: #3b82f6; border-color: #2563eb; animation: pulse 2s infinite; }
+    .kit-grey { background-color: #e5e7eb; color: #9ca3af; border-color: #d1d5db; cursor: default; }
+    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(59, 130, 246, 0); } 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); } }
 </style>
 
 <div id="success-popup">
@@ -44,28 +67,68 @@
     </div>
 </div>
 
+<div id="kit-completion-overlay">
+    <div class="blink-active">
+        <i class="fas fa-box-open fa-6x text-white mb-4"></i>
+        <h1 class="fw-bold display-3 text-white">KIT <span id="completed-kit-num">#</span></h1>
+        <h2 class="text-white opacity-75 text-uppercase">Completed Successfully</h2>
+    </div>
+</div>
+
+<div id="kit-warning-overlay">
+    <div class="mb-4"><i class="fas fa-exclamation-triangle fa-6x text-white"></i></div>
+    <h1 class="fw-bold display-4 text-white">OVERCOUNT DETECTED</h1>
+    <h3 class="text-white mb-4">Proceeding to next kit...</h3>
+    <div class="bg-white text-dark p-3 rounded shadow-sm d-inline-block text-start" style="min-width: 300px;">
+        <h6 class="border-bottom pb-2 mb-2 fw-bold text-warning">Extra Parts Detected:</h6>
+        <ul class="mb-0 ps-3" id="warning-list"></ul>
+    </div>
+</div>
+
+<div id="kit-error-overlay">
+    <div class="error-card">
+        <div class="text-center mb-2"><i class="fas fa-exclamation-circle fa-4x text-danger"></i></div>
+        <h2 class="fw-bold text-danger text-center mb-1" id="err-title">VALIDATION FAILED</h2>
+        <h5 class="text-muted text-center mb-4" id="err-subtitle">Action Required</h5>
+        <div id="err-content" class="mb-4 bg-light p-3 rounded border"></div>
+        <label class="fw-bold text-secondary mb-1">Select Resolution Reason:</label>
+        <select class="form-select reason-select" id="err-reason">
+            <option value="" disabled selected>-- Choose Action --</option>
+        </select>
+        <button class="btn btn-danger w-100 btn-lg fw-bold" onclick="submitResolution()">CONFIRM & PROCEED <i class="fas fa-arrow-right ms-2"></i></button>
+    </div>
+</div>
+
+<div id="job-completion-overlay">
+    <div class="blink-active">
+        <i class="fas fa-flag-checkered fa-6x text-warning mb-4"></i>
+        <h1 class="fw-bold display-1 text-white">JOB COMPLETED</h1>
+        <h3 class="text-white opacity-75 text-uppercase">All Kits Packed Successfully!</h3>
+        <div class="mt-5">
+            <div class="spinner-border text-light me-2" role="status" style="width: 1.5rem; height: 1.5rem;"></div>
+            <span class="text-white">Redirecting to Dashboard...</span>
+        </div>
+    </div>
+</div>
+
 <div class="monitor-header">
     <div class="row align-items-center">
         <div class="col-md-3 d-flex align-items-center gap-3">
             <a href="{{ url_for('kitting.index') }}" class="btn btn-outline-secondary btn-sm border-0 fw-bold"><i class="fas fa-arrow-left me-1"></i> Back</a>
             <span class="badge rounded-pill bg-success px-3 py-2 text-uppercase">{{ activity.status }}</span>
+            <button class="btn btn-primary btn-sm fw-bold px-3" onclick="openHistoryGrid()">
+                <i class="fas fa-th me-2"></i> View Kits
+            </button>
         </div>
         <div class="col-md-5 px-5">
             <div class="d-flex justify-content-between small fw-bold text-muted mb-1">
                 <span>OVERALL PROGRESS (Job)</span>
-                
-                {# --- FIXED MATH LOGIC --- #}
                 {% set parts_per_kit = activity.components|length %}
                 {% set total_job_parts = parts_per_kit * activity.total_kits_to_pack %}
-                
-                {# Parts done in previous kits + parts done in current kit #}
                 {% set completed_in_current = activity.components|selectattr('status','equalto','completed')|list|length %}
                 {% set parts_done_historically = ((activity.current_kit_index - 1) * parts_per_kit) %}
                 {% set total_done = parts_done_historically + completed_in_current %}
-
-                {# Calculate % #}
                 {% set percent = (total_done / total_job_parts * 100)|round|int if total_job_parts > 0 else 0 %}
-                
                 <span class="text-dark">{{ percent }}%</span>
             </div>
             <div class="progress" style="height: 8px; border-radius: 4px;">
@@ -91,24 +154,17 @@
                 <div class="small text-muted fw-bold">Kit #{{ activity.current_kit_index }}</div>
             </div>
             <div class="cam-body">
-                
                 <div class="section-header completed">
                     {% set completed_count = activity.components | selectattr('camera', 'equalto', cam_name) | selectattr('status', 'equalto', 'completed') | list | length %}
                     <span>Completed ({{ completed_count }})</span>
                 </div>
                 <div class="row g-3 mb-4">
-                    {# FIX: Loop through MAIN list to preserve loop.index0, but use IF to filter #}
                     {% for part in activity.components %}
                         {% if part.camera == cam_name and part.status == 'completed' %}
                         <div class="col-md-6">
                             <div class="part-card completed">
                                 <div class="order-badge">#{{ part.sequence_order }}</div>
-                                
-                                {# Correct Index Check #}
-                                {% if activity.last_detected_index == loop.index0 %}
-                                    <div class="last-detected-badge">Last Detected</div>
-                                {% endif %}
-
+                                {% if activity.last_detected_index == loop.index0 %}<div class="last-detected-badge">Last Detected</div>{% endif %}
                                 <h5>{{ part.name }}</h5>
                                 <div class="part-qty text-primary fw-bold">Qty: {{ part.found_quantity }} / {{ part.quantity }}</div>
                             </div>
@@ -116,23 +172,16 @@
                         {% endif %}
                     {% endfor %}
                 </div>
-
                 <div class="section-header pending">
                     {% set pending_count = activity.components | selectattr('camera', 'equalto', cam_name) | selectattr('status', '!=', 'completed') | list | length %}
                     <span>Pending ({{ pending_count }})</span>
                 </div>
                 <div class="row g-3">
-                    {# FIX: Loop through MAIN list again, filter for pending #}
                     {% for part in activity.components %}
                         {% if part.camera == cam_name and part.status != 'completed' %}
                         <div class="col-md-6">
                             <div class="part-card pending">
-                                
-                                {# Correct Index Check #}
-                                {% if activity.last_detected_index == loop.index0 %}
-                                    <div class="last-detected-badge">Last Detected</div>
-                                {% endif %}
-
+                                {% if activity.last_detected_index == loop.index0 %}<div class="last-detected-badge">Last Detected</div>{% endif %}
                                 <h5>{{ part.name }}</h5>
                                 <div class="part-qty">
                                     {% if part.found_quantity and part.found_quantity > 0 %}
@@ -153,31 +202,211 @@
     {% endfor %}
 </div>
 
+<div class="modal fade" id="historyGridModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header bg-light">
+                <h5 class="modal-title fw-bold" id="modalTitle"><i class="fas fa-th me-2"></i> Select Kit to View Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body bg-light p-4">
+                <div id="grid-view">
+                    <div id="grid-loading" class="text-center py-5 d-none">
+                        <div class="spinner-border text-primary" role="status"></div>
+                    </div>
+                    <div class="kit-grid" id="kit-grid-container"></div>
+                    <div class="mt-4 d-flex gap-3 justify-content-center small text-muted">
+                        <div class="d-flex align-items-center gap-1"><div class="rounded-circle bg-success" style="width:10px;height:10px;"></div> Match</div>
+                        <div class="d-flex align-items-center gap-1"><div class="rounded-circle bg-warning" style="width:10px;height:10px;"></div> Over/Undercount</div>
+                        <div class="d-flex align-items-center gap-1"><div class="rounded-circle bg-danger" style="width:10px;height:10px;"></div> Missing/Wrong</div>
+                        <div class="d-flex align-items-center gap-1"><div class="rounded-circle bg-primary" style="width:10px;height:10px;"></div> In Progress</div>
+                    </div>
+                </div>
+                <div id="detail-view" class="d-none">
+                    <button class="btn btn-outline-secondary btn-sm mb-3" onclick="backToGrid()">
+                        <i class="fas fa-arrow-left me-1"></i> Back to Grid
+                    </button>
+                    <div id="detail-errors-section" class="mb-4 d-none">
+                        <h6 class="fw-bold text-danger border-bottom pb-2 mb-3">
+                            <i class="fas fa-exclamation-triangle me-2"></i> Anomalies / Errors
+                        </h6>
+                        <div class="row g-3" id="detail-errors-row"></div>
+                    </div>
+                    <h6 class="fw-bold text-success border-bottom pb-2 mb-3">
+                        <i class="fas fa-check-circle me-2"></i> Components Status
+                    </h6>
+                    <div class="row g-3" id="detail-components-row"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
 <script>
     const TABLE_ID = "{{ activity.table_id }}";
+    const ACT_ID = "{{ activity._id }}";
     const socket = io(SOCKET_URL, { transports: ['websocket'], upgrade: false });
+    
+    let currentErrorType = null; 
+    let currentErrorData = null; 
 
-    socket.on('connect', () => {
-        console.log("✅ Monitor Connected");
-        socket.emit('join_table', { table_id: TABLE_ID });
-    });
+    socket.on('connect', () => { socket.emit('join_table', { table_id: TABLE_ID }); });
 
     socket.on('ui_update', (data) => {
+        // 1. PART DETECTED
         if (data.type === 'refresh_needed') {
             const p = data.popup_data;
             document.getElementById('popup-part-name').innerText = p.part_name;
             document.getElementById('popup-qty').innerText = `Qty: ${p.found_qty} / ${p.required_qty}`;
             document.getElementById('popup-image').src = p.imageUrl + "?t=" + new Date().getTime();
             document.getElementById('success-popup').style.display = 'flex';
-
+            setTimeout(() => window.location.reload(), 2000);
+        }
+        // 2. ERRORS
+        else if (data.type === 'error_alert') showRedScreen('detection', data);
+        else if (data.type === 'validation_error') showRedScreen('validation', data);
+        
+        // 3. KIT COMPLETION (Normal / Warning)
+        else if (data.type === 'kit_completed' || data.type === 'kit_completed_with_warning') {
+            document.getElementById('kit-error-overlay').style.display = 'none';
+            if (data.type === 'kit_completed_with_warning') {
+                const list = document.getElementById('warning-list');
+                list.innerHTML = "";
+                (data.overcount_list || []).forEach(name => list.innerHTML += `<li>${name}</li>`);
+                document.getElementById('kit-warning-overlay').style.display = 'flex';
+            } else {
+                document.getElementById('completed-kit-num').innerText = "#" + data.completed_count;
+                document.getElementById('kit-completion-overlay').style.display = 'flex';
+            }
+            setTimeout(() => window.location.reload(), 4000);
+        }
+        
+        // 4. JOB COMPLETION (NEW: FIX FOR LAST KIT)
+        else if (data.type === 'job_completed') {
+            document.getElementById('kit-error-overlay').style.display = 'none';
+            document.getElementById('job-completion-overlay').style.display = 'flex';
+            // Wait 5 seconds, then go back to Main List
             setTimeout(() => {
-                window.location.reload();
-            }, 2000);
-        } 
-        else if (data.type === 'error_alert') {
-            alert("⚠️ Wrong Part Detected: " + data.detectedPart);
+                window.location.href = "{{ url_for('kitting.index') }}";
+            }, 5000);
         }
     });
+
+    // ... (Keep existing Red Screen Logic) ...
+    function showRedScreen(type, data) {
+        currentErrorType = type; currentErrorData = data; 
+        const overlay = document.getElementById('kit-error-overlay');
+        const title = document.getElementById('err-title');
+        const content = document.getElementById('err-content');
+        const select = document.getElementById('err-reason');
+        overlay.style.display = 'flex';
+        select.innerHTML = '<option value="" disabled selected>-- Choose Action --</option>';
+        if (type === 'detection') {
+            title.innerText = "WRONG PART DETECTED";
+            content.innerHTML = `<div class="text-center"><h4 class="fw-bold text-dark">${data.detectedPart}</h4><img src="${data.imageUrl}" class="img-fluid rounded border mt-2" style="max-height: 150px"></div>`;
+            ["Trash Removed", "Operator Override (Correct Part)", "System Error"].forEach(r => select.innerHTML += `<option value="${r}">${r}</option>`);
+        } else if (type === 'validation') {
+            title.innerText = "VALIDATION FAILED";
+            let html = '<ul class="list-group list-group-flush text-start">';
+            [...data.missing, ...data.undercount].forEach(item => html += `<li class="list-group-item list-group-item-danger"><i class="fas fa-minus-circle me-2"></i> Missing: <strong>${item}</strong></li>`);
+            if(data.overcount && data.overcount.length > 0) html += `<li class="list-group-item list-group-item-warning"><i class="fas fa-plus-circle me-2"></i> Also Overcounted: <strong>${data.overcount.join(', ')}</strong></li>`;
+            html += '</ul>'; content.innerHTML = html;
+            ["Packed Partial (Authorized)", "Inventory Issue", "System Error (Force Finish)"].forEach(r => select.innerHTML += `<option value="${r}">${r}</option>`);
+        }
+    }
+    async function submitResolution() {
+        const reason = document.getElementById('err-reason').value;
+        if (!reason) { alert("Please select a reason."); return; }
+        try {
+            await fetch(`/kitting/api/${TABLE_ID}/resolve_error`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ error_type: currentErrorType, reason: reason, error_details: currentErrorData })
+            });
+            document.getElementById('kit-error-overlay').style.display = 'none';
+        } catch (e) { console.error(e); alert("Error submitting resolution."); }
+    }
+
+    // --- GRID LOGIC ---
+    function openHistoryGrid() {
+        document.getElementById('grid-view').classList.remove('d-none');
+        document.getElementById('detail-view').classList.add('d-none');
+        document.getElementById('modalTitle').innerHTML = '<i class="fas fa-th me-2"></i> Select Kit to View Details';
+        const modal = new bootstrap.Modal(document.getElementById('historyGridModal'));
+        modal.show();
+        fetchGridData();
+    }
+
+    async function fetchGridData() {
+        const loader = document.getElementById('grid-loading');
+        const container = document.getElementById('kit-grid-container');
+        container.innerHTML = ''; loader.classList.remove('d-none');
+        try {
+            const res = await fetch(`/kitting/api/history_summary/${ACT_ID}`);
+            const data = await res.json();
+            loader.classList.add('d-none');
+            if (data.status === 'success') {
+                data.grid.forEach(kit => {
+                    const div = document.createElement('div');
+                    div.className = `kit-cell kit-${kit.color}`;
+                    div.innerText = kit.kit_number;
+                    if (kit.state === 'completed') div.onclick = () => loadKitDetails(kit.kit_number);
+                    else div.style.cursor = 'default';
+                    container.appendChild(div);
+                });
+            }
+        } catch(e) { console.error(e); loader.classList.add('d-none'); }
+    }
+
+    function backToGrid() {
+        document.getElementById('detail-view').classList.add('d-none');
+        document.getElementById('grid-view').classList.remove('d-none');
+        document.getElementById('modalTitle').innerHTML = '<i class="fas fa-th me-2"></i> Select Kit to View Details';
+    }
+
+    async function loadKitDetails(kitNum) {
+        document.getElementById('grid-view').classList.add('d-none');
+        document.getElementById('detail-view').classList.remove('d-none');
+        document.getElementById('modalTitle').innerHTML = `<i class="fas fa-box-open me-2"></i> Details for Kit #${kitNum}`;
+        
+        const compRow = document.getElementById('detail-components-row');
+        const errRow = document.getElementById('detail-errors-row');
+        const errSection = document.getElementById('detail-errors-section');
+        compRow.innerHTML = '<div class="text-center w-100"><div class="spinner-border text-primary"></div></div>';
+        errRow.innerHTML = '';
+
+        try {
+            const res = await fetch(`/kitting/api/history/${ACT_ID}/${kitNum}`);
+            const data = await res.json();
+            compRow.innerHTML = ''; 
+
+            if(data.status === 'success') {
+                data.components.forEach(part => {
+                    let statusClass = 'border-success'; 
+                    let bgClass = 'bg-white';
+                    if (part.found_quantity == 0) { statusClass = 'border-danger'; bgClass = 'bg-danger-subtle'; }
+                    else if (part.found_quantity != part.quantity) { statusClass = 'border-warning border-2'; bgClass = 'bg-warning-subtle'; }
+                    if (part.resolution_type === 'validation_override') statusClass = 'border-warning'; 
+
+                    let html = `<div class="col-md-3"><div class="p-3 rounded border ${statusClass} ${bgClass} h-100"><div class="small fw-bold text-muted mb-1">${part.sku || 'PART'}</div><h6 class="fw-bold mb-2">${part.name}</h6><div class="d-flex justify-content-between align-items-end"><span class="badge ${part.found_quantity >= part.quantity ? 'bg-success' : (part.found_quantity==0 ? 'bg-danger' : 'bg-warning text-dark')}">${part.found_quantity} / ${part.quantity}</span>`;
+                    if(part.last_image_url) html += `<a href="${part.last_image_url}" target="_blank" class="btn btn-sm btn-light py-0 px-1"><i class="fas fa-image"></i></a>`;
+                    html += `</div></div></div>`;
+                    compRow.innerHTML += html;
+                });
+
+                if(data.errors && data.errors.length > 0) {
+                    errSection.classList.remove('d-none');
+                    data.errors.forEach(err => {
+                        if(err.error_type === 'detection') {
+                            const details = err.error_details || {};
+                            const img = details.imageUrl ? `<img src="${details.imageUrl}" class="rounded mt-2" style="height:60px">` : '';
+                            errRow.innerHTML += `<div class="col-md-4"><div class="p-3 rounded border border-danger bg-danger-subtle"><div class="badge bg-danger mb-2">WRONG PART</div><h6 class="fw-bold text-danger">${details.detectedPart || 'Unknown'}</h6><div class="small text-muted"><strong>Reason:</strong> ${err.reason_selected}</div>${img}</div></div>`;
+                        }
+                    });
+                } else { errSection.classList.add('d-none'); }
+            }
+        } catch(e) { console.error(e); }
+    }
 </script>
 {% endblock %}
