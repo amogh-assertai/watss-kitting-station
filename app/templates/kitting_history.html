@@ -18,7 +18,7 @@
                             <th class="ps-4 py-3 text-uppercase text-muted small fw-bold">Date</th>
                             <th class="py-3 text-uppercase text-muted small fw-bold">Kit Name</th>
                             <th class="py-3 text-uppercase text-muted small fw-bold">PO / Order #</th>
-                            <th class="py-3 text-uppercase text-muted small fw-bold">Kits Packed</th>
+                            <th class="py-3 text-uppercase text-muted small fw-bold">Completed Kits (Cam1 / Cam2)</th>
                             <th class="py-3 text-uppercase text-muted small fw-bold">Status</th>
                             <th class="pe-4 py-3 text-end text-uppercase text-muted small fw-bold">Action</th>
                         </tr>
@@ -35,9 +35,22 @@
                             </td>
                             <td class="fw-bold text-primary">{{ job.order_number }}</td>
                             <td>
-                                <span class="badge bg-light text-dark border">
-                                    {{ job.current_kit_index }} / {{ job.total_kits_to_pack }}
-                                </span>
+                                {% set c1_completed = (job.current_kit_index_cam1|default(1) | int) - 1 %}
+                                {% set c2_completed = (job.current_kit_index_cam2|default(1) | int) - 1 %}
+                                
+                                {% if c1_completed < 0 %}{% set c1_completed = 0 %}{% endif %}
+                                {% if c2_completed < 0 %}{% set c2_completed = 0 %}{% endif %}
+
+                                <div class="d-flex gap-2">
+                                    <span class="badge bg-white text-dark border d-flex align-items-center gap-2 shadow-sm">
+                                        <small class="text-muted text-uppercase fw-bold" style="font-size:0.65rem">Cam1: </small>
+                                        <span>{{ c1_completed }} / {{ job.total_kits_to_pack }}</span>
+                                    </span>
+                                    <span class="badge bg-white text-dark border d-flex align-items-center gap-2 shadow-sm">
+                                        <small class="text-muted text-uppercase fw-bold" style="font-size:0.65rem">Cam2: </small>
+                                        <span>{{ c2_completed }} / {{ job.total_kits_to_pack }}</span>
+                                    </span>
+                                </div>
                             </td>
                             <td>
                                 {% if job.status == 'completed_job' %}
