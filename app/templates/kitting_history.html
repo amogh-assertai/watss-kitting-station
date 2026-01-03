@@ -60,7 +60,8 @@
                                 {% endif %}
                             </td>
                             <td class="pe-4 text-end">
-                                <a href="{{ url_for('kitting.monitor_activity', activity_id=job._id) }}" class="btn btn-sm btn-outline-primary fw-bold">
+                                <a href="{{ url_for('kitting.monitor_activity', activity_id=job._id|string) }}" 
+                                class="btn btn-sm btn-outline-primary fw-bold">
                                     View Report <i class="fas fa-arrow-right ms-2"></i>
                                 </a>
                             </td>

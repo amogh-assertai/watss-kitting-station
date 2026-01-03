@@ -424,79 +424,105 @@
     async function loadKitDetails(kitNum) {
         document.getElementById('grid-view').classList.add('d-none');
         document.getElementById('detail-view').classList.remove('d-none');
-        const res = await fetch(`/kitting/api/history/${ACT_ID}/${currentHistoryCam}/${kitNum}`);
-        const data = await res.json();
         
-        const compRow = document.getElementById('detail-components-row');
-        const errRow = document.getElementById('detail-errors-row');
-        const errSection = document.getElementById('detail-errors-section');
-        compRow.innerHTML = ''; errRow.innerHTML = '';
-
-        if(data.status === 'success') {
-            // 1. Render Components
-            data.components.forEach(part => {
-                let statusClass = 'border-success'; 
-                if (part.found_quantity == 0) statusClass = 'border-danger';
-                else if (part.found_quantity != part.quantity) statusClass = 'border-warning';
-                
-                let html = `
-                <div class="col-md-6">
-                    <div class="history-card ${statusClass}">
-                        <div class="history-card-header">
-                            <div><div class="small fw-bold text-muted">PART:</div><strong>${part.name}</strong></div>
-                            <span class="badge ${part.found_quantity >= part.quantity ? 'bg-success' : 'bg-warning text-dark'}">${part.found_quantity}/${part.quantity}</span>
-                        </div>
-                        <div class="history-img-grid">
-                `;
-                
-                const images = (part.captured_images && part.captured_images.length > 0) ? part.captured_images : (part.last_image_url ? [part.last_image_url] : []);
-                
-                if (images.length > 0) {
-                    images.forEach((url, idx) => {
-                        html += `
-                            <div class="history-img-item" onclick="openZoom('${url}')">
-                                <div class="img-badge">Image ${idx + 1} of ${part.quantity}</div>
-                                <img src="${url}">
-                            </div>
-                        `;
-                    });
-                } else {
-                    html += `<div class="p-3 text-muted small text-center w-100">No images captured</div>`;
-                }
-
-                html += `</div></div></div>`;
-                compRow.innerHTML += html;
-            });
-
-            // 2. Render Errors (FIXED SECTION)
-            if (data.errors && data.errors.length > 0) {
-                errSection.classList.remove('d-none');
-                data.errors.forEach(err => {
-                    const details = err.error_details || {};
-                    const partName = details.detectedPart || details.detected_part || 'Unknown Object';
-                    const reason = err.reason_selected || err.reason || 'Pending Resolution';
+        try {
+            const res = await fetch(`/kitting/api/history/${ACT_ID}/${currentHistoryCam}/${kitNum}`);
+            const data = await res.json();
+            
+            const compRow = document.getElementById('detail-components-row');
+            const errRow = document.getElementById('detail-errors-row');
+            const errSection = document.getElementById('detail-errors-section');
+            compRow.innerHTML = ''; errRow.innerHTML = '';
+    
+            if(data.status === 'success') {
+                // 1. Render Components
+                data.components.forEach(part => {
+                    let statusClass = 'border-success'; 
+                    if (part.found_quantity == 0) statusClass = 'border-danger';
+                    else if (part.found_quantity != part.quantity) statusClass = 'border-warning';
                     
-                    let imgHtml = '';
-                    if (details.imageUrl) {
-                        imgHtml = `<img src="${details.imageUrl}" class="rounded mt-2 border" style="height:100px; width:100%; object-fit:contain; background:#fff; cursor:zoom-in" onclick="openZoom('${details.imageUrl}')">`;
-                    }
-
-                    errRow.innerHTML += `
-                        <div class="col-md-4">
-                            <div class="p-3 rounded border border-danger bg-danger-subtle h-100">
-                                <div class="d-flex justify-content-between align-items-start mb-2">
-                                    <span class="badge bg-danger">WRONG PART</span>
-                                    <small class="text-danger fw-bold">${new Date(err.timestamp).toLocaleTimeString()}</small>
-                                </div>
-                                <h6 class="fw-bold text-danger mb-1">${partName}</h6>
-                                <div class="small text-muted mb-2"><strong>Resolution:</strong> ${reason}</div>
-                                ${imgHtml}
+                    let html = `
+                    <div class="col-md-6">
+                        <div class="history-card ${statusClass}">
+                            <div class="history-card-header">
+                                <div><div class="small fw-bold text-muted">PART:</div><strong>${part.name}</strong></div>
+                                <span class="badge ${part.found_quantity >= part.quantity ? 'bg-success' : 'bg-warning text-dark'}">${part.found_quantity}/${part.quantity}</span>
                             </div>
-                        </div>`;
+                            <div class="history-img-grid">
+                    `;
+                    
+                    // Handle Fallback logic for images
+                    const images = (part.captured_images && part.captured_images.length > 0) ? part.captured_images : (part.last_image_url ? [part.last_image_url] : []);
+                    
+                    if (images.length > 0) {
+                        images.forEach((imgItem, idx) => {
+                            // --- FIX: Handle Object vs String ---
+                            let src = "";
+                            let badgeInfo = "";
+    
+                            if (typeof imgItem === 'string') {
+                                // Old Format: Simple String URL
+                                src = imgItem;
+                            } else if (imgItem && imgItem.image_url) {
+                                // New Format: Rich Object
+                                src = imgItem.image_url;
+                                // Add Confidence if exists
+                                if (imgItem.confidence) {
+                                    const pct = Math.round(imgItem.confidence * 100);
+                                    badgeInfo = ` (${pct}%)`;
+                                }
+                            }
+    
+                            if (src) {
+                                html += `
+                                    <div class="history-img-item" onclick="openZoom('${src}')">
+                                        <div class="img-badge">Img ${idx + 1}${badgeInfo}</div>
+                                        <img src="${src}">
+                                    </div>
+                                `;
+                            }
+                        });
+                    } else {
+                        html += `<div class="p-3 text-muted small text-center w-100">No images captured</div>`;
+                    }
+    
+                    html += `</div></div></div>`;
+                    compRow.innerHTML += html;
                 });
-            } else { 
-                errSection.classList.add('d-none'); 
+    
+                // 2. Render Errors
+                if (data.errors && data.errors.length > 0) {
+                    errSection.classList.remove('d-none');
+                    data.errors.forEach(err => {
+                        const details = err.error_details || {};
+                        const partName = details.detectedPart || details.detected_part || 'Unknown Object';
+                        const reason = err.reason_selected || err.reason || 'Pending Resolution';
+                        
+                        let imgHtml = '';
+                        if (details.imageUrl) {
+                            imgHtml = `<img src="${details.imageUrl}" class="rounded mt-2 border" style="height:100px; width:100%; object-fit:contain; background:#fff; cursor:zoom-in" onclick="openZoom('${details.imageUrl}')">`;
+                        }
+    
+                        errRow.innerHTML += `
+                            <div class="col-md-4">
+                                <div class="p-3 rounded border border-danger bg-danger-subtle h-100">
+                                    <div class="d-flex justify-content-between align-items-start mb-2">
+                                        <span class="badge bg-danger">WRONG PART</span>
+                                        <small class="text-danger fw-bold">${new Date(err.timestamp).toLocaleTimeString()}</small>
+                                    </div>
+                                    <h6 class="fw-bold text-danger mb-1">${partName}</h6>
+                                    <div class="small text-muted mb-2"><strong>Resolution:</strong> ${reason}</div>
+                                    ${imgHtml}
+                                </div>
+                            </div>`;
+                    });
+                } else { 
+                    errSection.classList.add('d-none'); 
+                }
             }
+        } catch (e) {
+            console.error("Error loading kit details:", e);
+            alert("Failed to load history details.");
         }
     }
 

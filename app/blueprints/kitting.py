@@ -9,6 +9,11 @@ import json
 from werkzeug.utils import secure_filename
 from app.config import Config
 
+import logging
+import traceback
+
+from bson.errors import InvalidId # Import at top
+
 kitting_bp = Blueprint('kitting', __name__, url_prefix='/kitting')
 
 # --- HELPER: NORMALIZE CAM ID ---
@@ -151,12 +156,21 @@ def sanitize_activity_for_json(activity):
 @kitting_bp.route('/monitor/<activity_id>')
 def monitor_activity(activity_id):
     db = get_db()
-    activity = db.activities.find_one({"_id": ObjectId(activity_id)})
-    if not activity: return "Not Found", 404
     
-    # This ensures Jinja's |tojson works correctly for the error arrays
+    # 1. Validate ID format
+    try:
+        oid = ObjectId(activity_id)
+    except InvalidId:
+        # Instead of crashing, return a helpful error or redirect back to history
+        current_app.logger.error(f"Invalid Activity ID received: {activity_id}")
+        return render_template('error.html', message="Invalid Job ID format"), 400
+
+    # 2. Find Activity
+    activity = db.activities.find_one({"_id": oid})
+    if not activity: 
+        return "Activity Not Found", 404
+    
     sanitized_activity = sanitize_activity_for_json(activity)
-    
     return render_template('monitor.html', activity=sanitized_activity)
 
 @kitting_bp.route('/complete_manual', methods=['POST'])
@@ -294,131 +308,236 @@ def check_table_status(table_id):
     return jsonify({"status": "active", "message": "System ready"}), 200
 
 # --- DETECTION API ---
+import logging
+import traceback
+from flask import current_app
+
+# --- DETECTION API ---
 @kitting_bp.route('/api/<table_id>/detection', methods=['POST'])
 def update_detection(table_id):
-    db = get_db()
-    
-    # 1. Fetch Activity
-    activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
-    if not activity: return jsonify({"message": "No active job"}), 404
+    """
+    Handles object detection events from the AI Station.
+    - Processes the image and metadata.
+    - Updates kit progress if the part is valid.
+    - Locks the system if the part is wrong.
+    - Returns 200 (OK), 409 (Wrong Part), 423 (Locked), or 500 (Server Error).
+    """
+    try:
+        db = get_db()
+        
+        # ---------------------------------------------------------------------
+        # [BLOCK 1] VALIDATION & STATE CHECKS
+        # ---------------------------------------------------------------------
+        # 1. Fetch Active Activity
+        # We look for a job on this specific table that is currently 'on-going'.
+        activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
+        
+        if not activity:
+            current_app.logger.warning(f"Detection received for inactive Table {table_id}")
+            return jsonify({"message": "No active job"}), 404
 
-    # 2. Global Lock Check
-    if activity.get('current_kit_errors_cam1') or activity.get('current_kit_errors_cam2'):
-        return jsonify({"message": "System Locked", "code": "system_locked"}), 423
+        # 2. Global Lock Check
+        # If any camera currently has an unresolved error (Red Screen), reject new detections.
+        # This prevents the operator from continuing without resolving the issue first.
+        if activity.get('current_kit_errors_cam1') or activity.get('current_kit_errors_cam2'):
+            return jsonify({"message": "System Locked", "code": "system_locked"}), 423
 
-    # 3. Process Image
-    if 'image' not in request.files: return jsonify({"message": "No image"}), 422
-    file = request.files['image']
-    raw_payload = request.form.get('payload')
-    data = json.loads(raw_payload) if raw_payload else {}
-    
-    # Use helper for ID
-    cam_id = get_safe_cam_id(data.get('camId', ''))
-    
-    detected_part = data.get('detectedPart', '')
-    
-    current_kit_num = activity.get(f'current_kit_index_{cam_id}', 1)
-    total_kits = activity.get('total_kits_to_pack', 1)
+        # 3. Input Validation
+        # Ensure an image file was actually sent in the request.
+        if 'image' not in request.files:
+            return jsonify({"message": "No image provided"}), 422
+        
+        file = request.files['image']
 
-    if current_kit_num > total_kits:
-        return jsonify({"message": "camera-job-completed", "code": "done"}), 200
-    
-    activity_id = str(activity['_id'])
-    filename = secure_filename(f"{activity_id}_{cam_id}_kit{current_kit_num}_{detected_part}_{int(datetime.utcnow().timestamp())}.jpg")
-    file.save(os.path.join(Config.UPLOAD_FOLDER, filename))
-    image_url = url_for('kitting.get_image', filename=filename) 
+        # ---------------------------------------------------------------------
+        # [BLOCK 2] DATA PARSING & METADATA EXTRACTION
+        # ---------------------------------------------------------------------
+        # 4. Parse Rich Payload
+        # The AI sends metadata as a JSON string inside the 'payload' form-field.
+        raw_payload = request.form.get('payload')
+        data = json.loads(raw_payload) if raw_payload else {}
+        
+        # Extract Metadata safely with defaults
+        cam_id = get_safe_cam_id(data.get('camId', ''))
+        detected_part = data.get('detectedPart', '')           # Logical name (mapped)
+        ai_raw_name = data.get('AiDetectedPartName', '')       # Raw class name from model
+        confidence = data.get('avgThreshold', 0.0)             # Confidence score (0.0 - 1.0)
+        tracking_id = data.get('Tracking_id', None)            # Unique ID from object tracker
+        
+        # Check Job Limits
+        current_kit_num = activity.get(f'current_kit_index_{cam_id}', 1)
+        total_kits = activity.get('total_kits_to_pack', 1)
 
-    current_components = activity.get('components', [])
-    target_index = -1
-    target_part = None
+        # If the job is already finished for this camera, ignore extra detections.
+        if current_kit_num > total_kits:
+            return jsonify({"message": "camera-job-completed", "code": "done"}), 200
+        
+        # ---------------------------------------------------------------------
+        # [BLOCK 3] FILE HANDLING
+        # ---------------------------------------------------------------------
+        # Generate a unique filename: {ActivityID}_{CamID}_{KitNum}_{Part}_{Timestamp}.jpg
+        activity_id = str(activity['_id'])
+        timestamp = int(datetime.utcnow().timestamp())
+        filename = secure_filename(f"{activity_id}_{cam_id}_kit{current_kit_num}_{detected_part}_{timestamp}.jpg")
+        
+        # Save to disk
+        file_path = os.path.join(Config.UPLOAD_FOLDER, filename)
+        file.save(file_path)
+        
+        # Generate Web URL for the frontend to access this image
+        image_url = url_for('kitting.get_image', filename=filename) 
 
-    # Logic: Hungry Slot
-    for idx, part in enumerate(current_components):
-        if get_safe_cam_id(part.get('camera')) == cam_id:
-            if str(part.get('name')) == str(detected_part):
-                if part.get('found_quantity', 0) < part.get('quantity', 1):
-                    target_part = part; target_index = idx; break
-    
-    # Logic: Overcount Slot
-    if not target_part:
+        # Create a Rich Detection Record Object
+        # This object contains all metadata to be stored in the DB (for history/debugging)
+        detection_record = {
+            "image_url": image_url,
+            "timestamp": datetime.utcnow(),
+            "ai_class_name": ai_raw_name,
+            "confidence": confidence,
+            "tracking_id": tracking_id,
+            "cam_id": cam_id
+        }
+
+        # ---------------------------------------------------------------------
+        # [BLOCK 4] PART MATCHING LOGIC
+        # ---------------------------------------------------------------------
+        current_components = activity.get('components', [])
+        target_index = -1
+        target_part = None
+
+        # Logic A: "Hungry Slot"
+        # Look for a part that MATCHES the detected name AND still NEEDS items (found < quantity).
         for idx, part in enumerate(current_components):
             if get_safe_cam_id(part.get('camera')) == cam_id:
                 if str(part.get('name')) == str(detected_part):
-                    target_part = part; target_index = idx; break
+                    if part.get('found_quantity', 0) < part.get('quantity', 1):
+                        target_part = part
+                        target_index = idx
+                        break
+        
+        # Logic B: "Overcount Slot" (Fallback)
+        # If all slots are full, but the part name matches, assign it to the first matching slot.
+        # This allows the system to register an "Overcount" later.
+        if not target_part:
+            for idx, part in enumerate(current_components):
+                if get_safe_cam_id(part.get('camera')) == cam_id:
+                    if str(part.get('name')) == str(detected_part):
+                        target_part = part
+                        target_index = idx
+                        break
 
-    # --- WRONG PART LOGIC ---
-    if not target_part:
-        error_data = {
-            "error_type": "detection",
-            "reason_selected": None, # Pending resolution
-            "timestamp": datetime.utcnow(),
-            "error_details": {
+        # ---------------------------------------------------------------------
+        # [BLOCK 5] WRONG PART DETECTED (ERROR FLOW)
+        # ---------------------------------------------------------------------
+        # If target_part is still None, it means this detected object is not in the Kit Bill of Materials.
+        if not target_part:
+            error_data = {
+                "error_type": "detection",
+                "reason_selected": None, # Will be filled by operator resolution
+                "timestamp": datetime.utcnow(),
+                "error_details": {
+                    "message": "wrong_part_detected",
+                    "imageUrl": image_url,
+                    "detectedPart": detected_part,
+                    "AiDetectedPartName": ai_raw_name, # Stored for debug
+                    "avgThreshold": confidence,        # Stored for debug
+                    "Tracking_id": tracking_id,        # Stored for debug
+                    "error_code": "wrong-part",
+                    "camId": cam_id 
+                }
+            }
+            
+            # DB Action: Push error to 'current_kit_errors' array.
+            # This immediately locks the system (see Block 1, Step 2).
+            error_key = f"current_kit_errors_{cam_id}"
+            db.activities.update_one(
+                {"_id": activity['_id']}, 
+                {"$push": {error_key: error_data}}
+            )
+
+            # Socket Action: Trigger Red Screen on UI
+            socketio.emit('ui_update', {
+                "type": "error_alert",
                 "message": "wrong_part_detected",
                 "imageUrl": image_url,
                 "detectedPart": detected_part,
-                "error_code": "wrong-part",
                 "camId": cam_id 
-            }
+            }, to=f"table_{table_id}")
+            
+            current_app.logger.info(f"Wrong Part Detected on Table {table_id}: {detected_part}")
+            return jsonify({"message": "wrong_part", "code": "wrong-part"}), 409
+
+        # ---------------------------------------------------------------------
+        # [BLOCK 6] CORRECT PART DETECTED (SUCCESS FLOW)
+        # ---------------------------------------------------------------------
+        new_found = target_part.get('found_quantity', 0) + 1
+        required_qty = target_part.get('quantity', 1)
+        
+        # Prepare DB Update
+        update_field = f"components.{target_index}"
+        last_detected_key = f"last_detected_index_{cam_id}"
+        
+        db_updates = {
+            f"{update_field}.found_quantity": new_found,
+            f"{update_field}.last_image_url": image_url, # Quick access for UI thumbnail
+            "last_updated": datetime.utcnow(),
+            last_detected_key: target_index 
         }
         
-        # SAVE TO DB IMMEDIATELY
-        error_key = f"current_kit_errors_{cam_id}"
+        # Check if this specific component slot is now full
+        if new_found >= required_qty:
+            db_updates[f"{update_field}.status"] = "completed"
+            
+            # Assign sequence order (e.g., this is the 3rd unique part finished)
+            if not target_part.get('sequence_order'):
+                c_done = sum(1 for p in current_components if get_safe_cam_id(p.get('camera')) == cam_id and p.get('status') == 'completed')
+                db_updates[f"{update_field}.sequence_order"] = c_done + 1
+
+        # DB Action: Update counts AND Push the Rich Object to history list
         db.activities.update_one(
-            {"_id": activity['_id']}, 
-            {"$push": {error_key: error_data}}
+            {"_id": ObjectId(activity_id)}, 
+            {
+                "$set": db_updates,
+                "$push": {f"{update_field}.captured_images": detection_record} 
+            }
         )
 
+        # Socket Action: Show Green "Detected" Popup on UI
         socketio.emit('ui_update', {
-            "type": "error_alert",
-            "message": "wrong_part_detected",
-            "imageUrl": image_url,
-            "detectedPart": detected_part,
-            "error_code": "wrong-part",
-            "camId": cam_id 
+            "type": "refresh_needed",
+            "popup_data": {
+                "part_name": target_part.get('name'),
+                "found_qty": new_found,
+                "required_qty": required_qty,
+                "imageUrl": image_url,
+                "camId": cam_id
+            }
         }, to=f"table_{table_id}")
+
+        return jsonify({
+        "message": "correct-part-detected",
+        "found": new_found,
+        "part_name": detected_part,
+        "cam_id": cam_id,
+        "tracking_id": tracking_id,
+        "avg_threshold": confidence
+            }), 200
+
+    # ---------------------------------------------------------------------
+    # [BLOCK 7] EXCEPTION HANDLING
+    # ---------------------------------------------------------------------
+    except Exception as e:
+        # Log the full traceback so developers can debug the crash
+        error_msg = str(e)
+        tb = traceback.format_exc()
+        current_app.logger.error(f"CRITICAL ERROR in detection API for Table {table_id}: {error_msg}\n{tb}")
         
-        return jsonify({"message": "wrong_part", "code": "wrong-part"}), 409
-
-    # --- CORRECT PART LOGIC ---
-    new_found = target_part.get('found_quantity', 0) + 1
-    required_qty = target_part.get('quantity', 1)
-    last_detected_key = f"last_detected_index_{cam_id}" 
-    
-    update_field = f"components.{target_index}"
-    db_updates = {
-        f"{update_field}.found_quantity": new_found,
-        f"{update_field}.last_image_url": image_url,
-        "last_updated": datetime.utcnow(),
-        last_detected_key: target_index 
-    }
-    
-    if new_found >= required_qty:
-        db_updates[f"{update_field}.status"] = "completed"
-        if not target_part.get('sequence_order'):
-            c_done = sum(1 for p in current_components if get_safe_cam_id(p.get('camera')) == cam_id and p.get('status') == 'completed')
-            db_updates[f"{update_field}.sequence_order"] = c_done + 1
-
-    # NEW: Push image to list
-    db.activities.update_one(
-        {"_id": ObjectId(activity_id)}, 
-        {
-            "$set": db_updates,
-            "$push": {f"{update_field}.captured_images": image_url}
-        }
-    )
-
-    socketio.emit('ui_update', {
-        "type": "refresh_needed",
-        "popup_data": {
-            "part_name": target_part.get('name'),
-            "found_qty": new_found,
-            "required_qty": required_qty,
-            "imageUrl": image_url,
-            "camId": cam_id
-        }
-    }, to=f"table_{table_id}")
-
-    return jsonify({"message": "correct-part-detected", "found": new_found}), 200
+        # Return a 500 error so the AI station knows the server failed
+        return jsonify({
+            "status": "error", 
+            "message": "Internal Server Error processing detection",
+            "debug_error": error_msg 
+        }), 500
 
 # --- VALIDATION API ---
 @kitting_bp.route('/api/<table_id>/validate_cycle', methods=['POST'])
