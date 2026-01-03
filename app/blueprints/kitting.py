@@ -684,17 +684,91 @@ def validate_cycle(table_id):
         # ---------------------------------------------------------------------
         # [BLOCK 5] SUCCESS FLOW (COMPLETE KIT)
         # ---------------------------------------------------------------------
-        # Pass the image_url to the helper so it can be included in history/popup
+        
+        # 1. Setup Context
+        current_kit_idx = activity.get(f'current_kit_index_{cam_id}', 1)
+        warning_status = "overcount" if overcount else None
+        
+        # --- A. Generate Component Summary ---
+        component_details = []
+        cam_parts = [p for p in activity['components'] if get_safe_cam_id(p.get('camera')) == cam_id]
+        
+        for part in cam_parts:
+            captures = part.get('captured_images', [])
+            conf_values = []
+            for item in captures:
+                if isinstance(item, dict) and 'confidence' in item:
+                    try: conf_values.append(float(item['confidence']))
+                    except (ValueError, TypeError): pass
+            
+            avg_conf = 0.0
+            if conf_values: avg_conf = sum(conf_values) / len(conf_values)
+
+            component_details.append({
+                "part_name": part.get('name'),
+                "expected_qty": part.get('quantity', 0),
+                "detected_qty": part.get('found_quantity', 0),
+                "avg_confidence": round(avg_conf, 2),
+                "capture_count": len(captures)
+            })
+
+        # --- B. Generate Error/Anomaly Summary (NEW) ---
+        # Fetch all errors that were logged (resolved) for this specific kit & camera
+        resolved_errors_cursor = db.error_logs.find({
+            "activity_id": activity['_id'],
+            "kit_number": current_kit_idx,
+            "camera_id": cam_id
+        })
+
+        anomalies_summary = []
+        for err in resolved_errors_cursor:
+            details = err.get('error_details', {})
+            
+            # Determine the name of the wrong object
+            # Priority: DetectedPart (Logic) -> AiDetectedPartName (Raw) -> "Unknown"
+            wrong_obj_name = details.get('detectedPart') or details.get('AiDetectedPartName') or "Unknown Object"
+            
+            # If it was a validation error (missing parts), list them
+            if err.get('error_type') == 'validation':
+                missing_list = details.get('missing', [])
+                wrong_obj_name = f"Missing: {', '.join(missing_list)}" if missing_list else "Validation Failure"
+
+            anomalies_summary.append({
+                "type": err.get('error_type'),          # 'detection' or 'validation'
+                "object_detected": wrong_obj_name,      # What triggered it
+                "resolution_reason": err.get('reason_selected'), # Why it was cleared
+                "timestamp": err.get('timestamp').isoformat() if isinstance(err.get('timestamp'), datetime) else str(err.get('timestamp')),
+                "ai_confidence": details.get('avgThreshold'),    # If available
+                "tracking_id": details.get('Tracking_id')        # If available
+            })
+
+        # 2. Perform DB Updates & Archival
         perform_camera_completion(
             activity, 
             db, 
             table_id, 
             cam_id, 
-            warning_type="overcount" if overcount else None,
-            validation_image=image_url # <--- NEW Argument
+            warning_type=warning_status,
+            validation_image=image_url 
         )
         
-        return jsonify({"message": "kit-completed"}), 200
+        # 3. Return Rich Response
+        current_app.logger.info(f"Kit {current_kit_idx} completed on {cam_id}. Sending full summary.")
+        
+        return jsonify({
+            "message": "kit-completed",
+            "details": {
+                "kit_number": current_kit_idx,
+                "cam_id": cam_id,
+                "status": "completed_with_warning" if warning_status else "completed",
+                "validation_image": image_url,
+                "completed_at": datetime.utcnow().isoformat(),
+                "warnings": overcount if overcount else [],
+                "components_summary": component_details,
+                "anomalies_resolved": anomalies_summary # <--- The requested error history
+            }
+        }), 200
+        
 
     except Exception as e:
         current_app.logger.error(f"Error in validate_cycle: {str(e)}")
