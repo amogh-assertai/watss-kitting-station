@@ -190,101 +190,146 @@ def get_image(filename):
     return send_from_directory(Config.UPLOAD_FOLDER, filename)
 
 # --- HELPER: FINISH KIT (PER CAMERA) ---
-def perform_camera_completion(activity, db, table_id, cam_id, warning_type=None):
-    index_key = f"current_kit_index_{cam_id}"
-    error_key = f"current_kit_errors_{cam_id}"
-    last_detected_key = f"last_detected_index_{cam_id}"
-    
-    current_index = activity.get(index_key, 1)
-    total_kits = activity.get('total_kits_to_pack', 1)
-    
-    # 1. Archive
-    cam_components = [p for p in activity['components'] if str(p.get('camera')).lower() == cam_id.lower()]
-    
-    # --- FIX: QUERY USING OBJECTID ---
-    # Do not convert activity['_id'] to string here. 
-    # MongoDB error_logs has activity_id as ObjectId.
-    logged_errors = list(db.error_logs.find({
-        "activity_id": activity['_id'],  # Pass ObjectId directly
-        "kit_number": current_index,
-        "camera_id": cam_id
-    }))
-    
-    # Clean up _id from the fetched logs to avoid duplication issues in snapshot
-    for err in logged_errors:
-        if '_id' in err: del err['_id'] # Remove the log's own ID, we just want the data
+def perform_camera_completion(activity, db, table_id, cam_id, warning_type=None, validation_image=None):
+    """
+    Finalizes a kit cycle for a specific camera.
+    - Archives current state to history.
+    - Resets component counts for the next kit.
+    - Advances the kit index.
+    - Checks if the entire job is complete.
+    - Broadcasts updates to UI (including Punch Machine Image).
+    """
+    try:
+        current_app.logger.info(f"Performing completion for Table {table_id}, {cam_id}")
 
-    history_doc = {
-        "kit_number": current_index,
-        "camera_id": cam_id,
-        "completed_at": datetime.utcnow(),
-        "components_snapshot": cam_components,
-        "errors_snapshot": logged_errors, # Now this will actually have data!
-        "status": "completed_with_warning" if warning_type else "completed"
-    }
-    
-    history_doc["activity_id"] = activity['_id']
-    db.kit_history.insert_one(history_doc)
-    
-    doc_copy = history_doc.copy()
-    if '_id' in doc_copy: del doc_copy['_id']
-    if 'activity_id' in doc_copy: del doc_copy['activity_id']
-    db.activities.update_one({"_id": activity['_id']}, {"$push": {"history": doc_copy}})
+        index_key = f"current_kit_index_{cam_id}"
+        error_key = f"current_kit_errors_{cam_id}"
+        last_detected_key = f"last_detected_index_{cam_id}"
+        
+        current_index = activity.get(index_key, 1)
+        total_kits = activity.get('total_kits_to_pack', 1)
+        
+        # ---------------------------------------------------------------------
+        # [BLOCK 1] ARCHIVE HISTORY
+        # ---------------------------------------------------------------------
+        # 1. Get current state of components for this camera
+        cam_components = [p for p in activity['components'] if str(p.get('camera')).lower() == cam_id.lower()]
+        
+        # 2. Fetch resolved errors for this kit
+        # Note: We use activity['_id'] directly (ObjectId) to match DB format
+        logged_errors = list(db.error_logs.find({
+            "activity_id": activity['_id'],
+            "kit_number": current_index,
+            "camera_id": cam_id
+        }))
+        
+        # Clean up _id from logs to avoid duplication errors
+        for err in logged_errors:
+            if '_id' in err: del err['_id']
 
-    # 2. Advance Index
-    new_index = current_index + 1
-    
-    # 3. Reset Components (ONLY IF there is a next kit)
-    if new_index <= total_kits:
-        for idx, part in enumerate(activity['components']):
-            if str(part.get('camera')).lower() == cam_id.lower():
-                field_base = f"components.{idx}"
-                db.activities.update_one(
-                    {"_id": activity['_id']},
-                    {"$set": {
-                        f"{field_base}.found_quantity": 0,
-                        f"{field_base}.status": "pending"
-                    }, "$unset": {
-                        f"{field_base}.sequence_order": "",
-                        f"{field_base}.last_image_url": "",
-                        f"{field_base}.captured_images": "", 
-                        f"{field_base}.resolution_reason": "",
-                        f"{field_base}.resolution_type": ""
-                    }}
-                )
-
-    # 4. Update Activity Level
-    db.activities.update_one(
-        {"_id": activity['_id']},
-        {
-            "$set": {
-                index_key: new_index, 
-                error_key: [],
-                last_detected_key: -1 
-            }
+        # 3. Create History Document
+        history_doc = {
+            "activity_id": activity['_id'],
+            "kit_number": current_index,
+            "camera_id": cam_id,
+            "completed_at": datetime.utcnow(),
+            "components_snapshot": cam_components,
+            "errors_snapshot": logged_errors,
+            "status": "completed_with_warning" if warning_type else "completed",
+            
+            # NEW: Store the Punch Machine/Validation Image
+            "validation_image_url": validation_image 
         }
-    )
+        
+        # Insert into dedicated history collection
+        db.kit_history.insert_one(history_doc)
+        
+        # Also push a copy to the main activity document (for quick access)
+        doc_copy = history_doc.copy()
+        if '_id' in doc_copy: del doc_copy['_id']
+        if 'activity_id' in doc_copy: del doc_copy['activity_id']
+        db.activities.update_one({"_id": activity['_id']}, {"$push": {"history": doc_copy}})
 
-    # 5. Check Global Job Completion
-    updated_act = db.activities.find_one({"_id": activity['_id']})
-    idx1 = updated_act.get('current_kit_index_cam1', 1)
-    idx2 = updated_act.get('current_kit_index_cam2', 1)
-    
-    parts1 = [p for p in updated_act['components'] if str(p.get('camera')).lower() == 'cam1']
-    parts2 = [p for p in updated_act['components'] if str(p.get('camera')).lower() == 'cam2']
-    
-    cam1_done = (idx1 > total_kits) or (len(parts1) == 0)
-    cam2_done = (idx2 > total_kits) or (len(parts2) == 0)
+        # ---------------------------------------------------------------------
+        # [BLOCK 2] RESET & ADVANCE
+        # ---------------------------------------------------------------------
+        new_index = current_index + 1
+        
+        # Reset component counts ONLY if there are more kits to pack
+        if new_index <= total_kits:
+            for idx, part in enumerate(activity['components']):
+                if str(part.get('camera')).lower() == cam_id.lower():
+                    field_base = f"components.{idx}"
+                    db.activities.update_one(
+                        {"_id": activity['_id']},
+                        {"$set": {
+                            f"{field_base}.found_quantity": 0,
+                            f"{field_base}.status": "pending"
+                        }, "$unset": {
+                            f"{field_base}.sequence_order": "",
+                            f"{field_base}.last_image_url": "",
+                            f"{field_base}.captured_images": "", 
+                            f"{field_base}.resolution_reason": "",
+                            f"{field_base}.resolution_type": ""
+                        }}
+                    )
 
-    if cam1_done and cam2_done:
-        db.activities.update_one({"_id": activity['_id']}, {"$set": {"status": "completed_job", "end_time": datetime.utcnow()}})
-        socketio.emit('ui_update', {"type": "job_completed"}, to=f"table_{table_id}")
-    else:
-        socketio.emit('ui_update', {
-            "type": "kit_completed" if not warning_type else "kit_completed_with_warning",
-            "camId": cam_id,
-            "completed_count": current_index
-        }, to=f"table_{table_id}")
+        # Update Activity-level indexes
+        db.activities.update_one(
+            {"_id": activity['_id']},
+            {
+                "$set": {
+                    index_key: new_index, 
+                    error_key: [],
+                    last_detected_key: -1 
+                }
+            }
+        )
+
+        # ---------------------------------------------------------------------
+        # [BLOCK 3] CHECK GLOBAL COMPLETION & NOTIFY UI
+        # ---------------------------------------------------------------------
+        updated_act = db.activities.find_one({"_id": activity['_id']})
+        
+        # Get progress for both cameras
+        idx1 = updated_act.get('current_kit_index_cam1', 1)
+        idx2 = updated_act.get('current_kit_index_cam2', 1)
+        
+        parts1 = [p for p in updated_act['components'] if str(p.get('camera')).lower() == 'cam1']
+        parts2 = [p for p in updated_act['components'] if str(p.get('camera')).lower() == 'cam2']
+        
+        # A camera is "done" if index exceeds total OR it has no parts assigned
+        cam1_done = (idx1 > total_kits) or (len(parts1) == 0)
+        cam2_done = (idx2 > total_kits) or (len(parts2) == 0)
+
+        if cam1_done and cam2_done:
+            # Entire Job Complete
+            db.activities.update_one(
+                {"_id": activity['_id']}, 
+                {"$set": {"status": "completed_job", "end_time": datetime.utcnow()}}
+            )
+            socketio.emit('ui_update', {"type": "job_completed"}, to=f"table_{table_id}")
+        else:
+            # Single Kit Complete -> Show Green/Yellow Popup
+            overcount_names = []
+            if warning_type == "overcount":
+                # Calculate which items were overcounted for display
+                overcount_names = [p['name'] for p in cam_components if p.get('found_quantity',0) > p.get('quantity',0)]
+
+            socketio.emit('ui_update', {
+                "type": "kit_completed" if not warning_type else "kit_completed_with_warning",
+                "camId": cam_id,
+                "completed_count": current_index,
+                "overcount_list": overcount_names,
+                
+                # NEW: Send the image to the UI popup
+                "imageUrl": validation_image 
+            }, to=f"table_{table_id}")
+
+    except Exception as e:
+        current_app.logger.error(f"Error in perform_camera_completion: {e}")
+        # We re-raise to ensure the caller (validate_cycle) knows something went wrong
+        raise e
 
 # --- SYSTEM STATUS API ---
 @kitting_bp.route('/api/<table_id>/status', methods=['GET'])
@@ -539,42 +584,121 @@ def update_detection(table_id):
             "debug_error": error_msg 
         }), 500
 
-# --- VALIDATION API ---
+# --- VALIDATION API (PUNCH MACHINE) ---
 @kitting_bp.route('/api/<table_id>/validate_cycle', methods=['POST'])
 def validate_cycle(table_id):
-    db = get_db()
-    data = request.json
-    
-    activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
-    if not activity: return jsonify({"message": "No active job"}), 404
-    
-    if activity.get('current_kit_errors_cam1') or activity.get('current_kit_errors_cam2'):
-        return jsonify({"message": "System Locked: Resolve Red Screen first"}), 423
+    """
+    Handles the 'Punch Machine' event (Manual Trigger or AI Empty Table).
+    1. Accepts an image of the empty table/punch event.
+    2. Validates if all parts in the current kit are present.
+    3. If VALID: Marks kit as complete, saves history, advances index.
+    4. If INVALID: Triggers 'Validation Error' Red Screen with the image.
+    """
+    try:
+        db = get_db()
 
-    cam_id = get_safe_cam_id(data.get('camId', ''))
-    
-    components = activity.get('components', [])
-    missing = []; undercount = []; overcount = []
+        # ---------------------------------------------------------------------
+        # [BLOCK 1] FETCH ACTIVITY & CHECK LOCKS
+        # ---------------------------------------------------------------------
+        activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
+        
+        if not activity:
+            current_app.logger.warning(f"Validation attempted on inactive table {table_id}")
+            return jsonify({"message": "No active job"}), 404
+        
+        # Prevent validation if there is already an active Red Screen
+        if activity.get('current_kit_errors_cam1') or activity.get('current_kit_errors_cam2'):
+            return jsonify({"message": "System Locked: Resolve Red Screen first"}), 423
 
-    for part in components:
-        if get_safe_cam_id(part.get('camera')) == cam_id:
-            name = part.get('name')
-            req = part.get('quantity', 0)
-            found = part.get('found_quantity', 0)
-            if found == 0 and req > 0 and part.get('alert_missing'): missing.append(name)
-            elif found > 0 and found < req and part.get('alert_undercount'): undercount.append(name)
-            elif found > req and part.get('alert_overcount'): overcount.append(name)
+        # ---------------------------------------------------------------------
+        # [BLOCK 2] PARSE INPUT (IMAGE + PAYLOAD)
+        # ---------------------------------------------------------------------
+        image_url = None
+        data = {}
 
-    if missing or undercount:
-        socketio.emit('ui_update', {
-            "type": "validation_error",
-            "missing": missing, "undercount": undercount, "overcount": overcount,
-            "camId": cam_id
-        }, to=f"table_{table_id}")
-        return jsonify({"message": "part-missing"}), 200
+        # Handle Multipart Request (With Image)
+        if 'payload' in request.form:
+            raw_payload = request.form.get('payload')
+            data = json.loads(raw_payload) if raw_payload else {}
+            
+            # Save the Punch Machine/Empty Table Image
+            if 'image' in request.files:
+                file = request.files['image']
+                cam_id_raw = get_safe_cam_id(data.get('camId', ''))
+                kit_idx = activity.get(f'current_kit_index_{cam_id_raw}', 1)
+                
+                # Naming: {ActID}_{CamID}_punch_kit{KitNum}_{Timestamp}.jpg
+                filename = secure_filename(f"{activity['_id']}_{cam_id_raw}_punch_kit{kit_idx}_{int(datetime.utcnow().timestamp())}.jpg")
+                file.save(os.path.join(Config.UPLOAD_FOLDER, filename))
+                image_url = url_for('kitting.get_image', filename=filename)
+        
+        # Fallback: Handle JSON-only request (Legacy/Testing without image)
+        elif request.is_json:
+            data = request.json
+        
+        cam_id = get_safe_cam_id(data.get('camId', ''))
 
-    perform_camera_completion(activity, db, table_id, cam_id, warning_type="overcount" if overcount else None)
-    return jsonify({"message": "kit-completed"}), 200
+        # ---------------------------------------------------------------------
+        # [BLOCK 3] VALIDATION LOGIC (CHECK MISSING/UNDERCOUNT)
+        # ---------------------------------------------------------------------
+        components = activity.get('components', [])
+        missing = []
+        undercount = []
+        overcount = []
+
+        for part in components:
+            # Only check parts assigned to this camera
+            if get_safe_cam_id(part.get('camera')) == cam_id:
+                name = part.get('name')
+                req = part.get('quantity', 0)
+                found = part.get('found_quantity', 0)
+                
+                # Logic: Check flags set in Kit Definition
+                if found == 0 and req > 0 and part.get('alert_missing'):
+                    missing.append(name)
+                elif found > 0 and found < req and part.get('alert_undercount'):
+                    undercount.append(name)
+                elif found > req and part.get('alert_overcount'):
+                    overcount.append(name)
+
+        # ---------------------------------------------------------------------
+        # [BLOCK 4] FAILURE FLOW (RED SCREEN)
+        # ---------------------------------------------------------------------
+        if missing or undercount:
+            # Emit socket event with the captured image to show context
+            socketio.emit('ui_update', {
+                "type": "validation_error",
+                "missing": missing, 
+                "undercount": undercount, 
+                "overcount": overcount,
+                "camId": cam_id,
+                "imageUrl": image_url  # <--- NEW: Send Image to UI
+            }, to=f"table_{table_id}")
+            
+            # Log the attempt? Optional.
+            return jsonify({
+                "message": "part-missing", 
+                "details": {"missing": missing, "undercount": undercount}
+            }), 200
+
+        # ---------------------------------------------------------------------
+        # [BLOCK 5] SUCCESS FLOW (COMPLETE KIT)
+        # ---------------------------------------------------------------------
+        # Pass the image_url to the helper so it can be included in history/popup
+        perform_camera_completion(
+            activity, 
+            db, 
+            table_id, 
+            cam_id, 
+            warning_type="overcount" if overcount else None,
+            validation_image=image_url # <--- NEW Argument
+        )
+        
+        return jsonify({"message": "kit-completed"}), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error in validate_cycle: {str(e)}")
+        return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
 
 @kitting_bp.route('/api/<table_id>/resolve_error', methods=['POST'])
 def resolve_error(table_id):
@@ -674,19 +798,22 @@ def get_history_summary(activity_id, cam_id):
         return jsonify({"status": "success", "grid": grid_data})
     except Exception as e: return jsonify({"status": "error", "message": str(e)}), 500
 
-# --- HISTORY DETAILS API (Ensure serialization) ---
+# --- HISTORY DETAILS API (Updated to include Validation Image) ---
 @kitting_bp.route('/api/history/<activity_id>/<cam_id>/<int:kit_number>')
 def get_kit_history_details(activity_id, cam_id, kit_number):
     db = get_db()
     try:
+        # 1. Fetch the specific history record
         record = db.kit_history.find_one({
             "activity_id": ObjectId(activity_id),
             "camera_id": cam_id,
             "kit_number": kit_number
         })
-        if not record: return jsonify({"status": "error"}), 404
         
-        # Sanitize Errors
+        if not record: 
+            return jsonify({"status": "error", "message": "Record not found"}), 404
+        
+        # 2. Sanitize Errors (Convert ObjectIds/Datetimes to strings)
         cleaned_errors = []
         for e in record.get('errors_snapshot', []): 
             if '_id' in e: e['_id'] = str(e['_id'])
@@ -695,13 +822,20 @@ def get_kit_history_details(activity_id, cam_id, kit_number):
                 e['timestamp'] = e['timestamp'].isoformat()
             cleaned_errors.append(e)
         
-        # Sanitize Components
+        # 3. Sanitize Components
         for c in record.get('components_snapshot', []):
              if '_id' in c: c['_id'] = str(c['_id'])
 
+        # 4. Return Data (INCLUDING THE NEW IMAGE FIELD)
         return jsonify({
             "status": "success",
             "components": record.get('components_snapshot', []),
-            "errors": cleaned_errors 
+            "errors": cleaned_errors,
+            
+            # --- NEW FIELD ADDED HERE ---
+            "validation_image_url": record.get('validation_image_url') 
         })
-    except Exception as e: return jsonify({"status": "error", "message": str(e)}), 500
+
+    except Exception as e:
+        current_app.logger.error(f"History API Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500

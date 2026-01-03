@@ -55,7 +55,7 @@
 
     .popup-img-container {
         flex-grow: 1; width: 100%; background-color: white; border-radius: 15px;
-        display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 15px; min-height: 50vh; 
+        display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 15px; min-height: 40vh; 
     }
     .popup-img-container img { width: 100%; height: 100%; object-fit: contain; }
 
@@ -261,6 +261,7 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body bg-light p-4">
+                
                 <div id="grid-view">
                     <div id="grid-loading" class="text-center py-5 d-none"><div class="spinner-border text-primary"></div></div>
                     <div class="kit-grid" id="kit-grid-container"></div>
@@ -271,8 +272,24 @@
                         <div class="d-flex align-items-center gap-1"><div class="rounded-circle bg-primary" style="width:10px;height:10px;"></div> In Progress</div>
                     </div>
                 </div>
+
                 <div id="detail-view" class="d-none">
                     <button class="btn btn-outline-secondary btn-sm mb-3" onclick="backToGrid()">Back</button>
+                    
+                    <div id="detail-validation-section" class="d-none mb-4">
+                        <div class="card border-primary bg-primary-subtle">
+                            <div class="card-body d-flex align-items-center gap-4">
+                                <div class="bg-primary text-white p-3 rounded-circle"><i class="fas fa-camera fa-2x"></i></div>
+                                <div>
+                                    <h6 class="fw-bold text-primary mb-1">Validation Snapshot</h6>
+                                    <p class="mb-0 small text-muted">Captured when kit was completed.</p>
+                                </div>
+                                <div id="detail-validation-img" class="ms-auto">
+                                    </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div id="detail-errors-section" class="d-none mb-4">
                         <h6 class="fw-bold text-danger border-bottom pb-2 mb-3"><i class="fas fa-exclamation-triangle me-2"></i> Errors & Anomalies</h6>
                         <div class="row g-3" id="detail-errors-row"></div>
@@ -318,6 +335,7 @@
         }
         if (data.type === 'error_alert' || data.type === 'validation_error') { 
             resetOverlays(); 
+            // UPDATED: Both Red Screens can now accept data with imageUrl
             if (data.type === 'error_alert') showRedScreen('detection', data); 
             else showRedScreen('validation', data); 
             return; 
@@ -346,30 +364,59 @@
             const themeClass = isWarning ? 'theme-yellow' : 'theme-dark-green';
             const iconClass = isWarning ? 'fa-exclamation-triangle' : 'fa-box-open';
             const titleText = isWarning ? 'OVERCOUNT DETECTED' : 'KIT COMPLETED';
+            
             overlay.className = `side-popup ${themeClass}`; overlay.style.display = 'flex';
-            let contentHtml = `<div class="d-flex flex-column align-items-center justify-content-center h-100"><i class="fas ${iconClass} fa-6x mb-4 popup-icon"></i><h1 class="fw-bold display-4 text-center">${titleText}</h1><h3 class="opacity-75 text-uppercase">Kit #${data.completed_count}</h3>`;
-            if (isWarning && data.overcount_list) { contentHtml += `<div class="mt-4 bg-white text-dark p-3 rounded shadow-sm text-start" style="min-width: 300px;"><h6 class="border-bottom pb-2 mb-2 fw-bold text-warning">Extra Parts:</h6><ul class="mb-0 ps-3">`; data.overcount_list.forEach(item => { contentHtml += `<li>${item}</li>`; }); contentHtml += `</ul></div>`; }
+            
+            let contentHtml = `<div class="d-flex flex-column align-items-center justify-content-center h-100">
+                <i class="fas ${iconClass} fa-6x mb-4 popup-icon"></i>
+                <h1 class="fw-bold display-4 text-center">${titleText}</h1>
+                <h3 class="opacity-75 text-uppercase">Kit #${data.completed_count}</h3>`;
+            
+            // --- UPDATED: Show Punch Machine Image if available ---
+            if (data.imageUrl) {
+                 contentHtml += `
+                 <div class="mt-4 rounded overflow-hidden border shadow-sm bg-white" style="max-height: 250px; width: 80%; display: flex; align-items: center; justify-content: center;">
+                    <img src="${data.imageUrl}" style="max-width: 100%; max-height: 250px; object-fit: contain;">
+                 </div>`;
+            }
+
+            if (isWarning && data.overcount_list) { 
+                contentHtml += `<div class="mt-4 bg-white text-dark p-3 rounded shadow-sm text-start" style="min-width: 300px;"><h6 class="border-bottom pb-2 mb-2 fw-bold text-warning">Extra Parts:</h6><ul class="mb-0 ps-3">`; 
+                data.overcount_list.forEach(item => { contentHtml += `<li>${item}</li>`; }); 
+                contentHtml += `</ul></div>`; 
+            }
             contentHtml += `</div>`;
             overlay.innerHTML = contentHtml;
             timers[targetCam] = setTimeout(() => window.location.reload(), 4000);
         }
     });
 
+    // --- UPDATED: RED SCREEN LOGIC TO SHOW VALIDATION IMAGES ---
     function showRedScreen(type, data) {
         currentErrorType = type; currentErrorData = data; 
         const overlay = document.getElementById('kit-error-overlay');
         document.getElementById('err-title').innerText = type === 'detection' ? "WRONG PART DETECTED" : "VALIDATION FAILED";
         
         let contentHtml = '';
+        
+        // --- NEW: Common Image Logic for BOTH types ---
+        let imgHtml = '';
+        if (data.imageUrl) {
+             imgHtml = `<div class="text-center mt-3"><img src="${data.imageUrl}" class="img-fluid rounded border shadow-sm" style="max-height: 200px; object-fit: contain; background: #fff;"></div>`;
+        }
+
         if (type === 'detection') {
-            const img = data.imageUrl ? `<img src="${data.imageUrl}" class="img-fluid rounded border mt-2" style="max-height: 150px">` : '';
-            contentHtml = `<div class="text-center"><h4 class="fw-bold text-dark">${data.detectedPart}</h4>${img}</div>`;
+            contentHtml = `<div class="text-center"><h4 class="fw-bold text-dark">${data.detectedPart}</h4></div>`;
         } else {
             contentHtml = '<ul class="list-group list-group-flush text-start">';
             [...data.missing, ...data.undercount].forEach(item => contentHtml += `<li class="list-group-item list-group-item-danger">Missing: <strong>${item}</strong></li>`);
             if(data.overcount) contentHtml += `<li class="list-group-item list-group-item-warning">Overcount: ${data.overcount.join(', ')}</li>`;
             contentHtml += '</ul>';
         }
+        
+        // Append Image Logic
+        contentHtml += imgHtml;
+
         document.getElementById('err-content').innerHTML = contentHtml;
         const select = document.getElementById('err-reason');
         select.innerHTML = '<option value="" disabled selected>-- Choose Action --</option>';
@@ -420,7 +467,7 @@
         document.getElementById('grid-view').classList.remove('d-none');
     }
     
-    // --- UPDATED: RENDER IMAGE GRID & ERRORS ---
+    // --- UPDATED: RENDER IMAGE GRID & ERRORS & VALIDATION IMAGE ---
     async function loadKitDetails(kitNum) {
         document.getElementById('grid-view').classList.add('d-none');
         document.getElementById('detail-view').classList.remove('d-none');
@@ -432,10 +479,30 @@
             const compRow = document.getElementById('detail-components-row');
             const errRow = document.getElementById('detail-errors-row');
             const errSection = document.getElementById('detail-errors-section');
+            const valSection = document.getElementById('detail-validation-section');
+            const valImgDiv = document.getElementById('detail-validation-img');
+            
             compRow.innerHTML = ''; errRow.innerHTML = '';
-    
+
             if(data.status === 'success') {
-                // 1. Render Components
+                
+                // --- 0. Render Validation (Punch) Image if exists ---
+                // "validation_image_url" comes from our updated backend history structure
+                if (data.validation_image_url || (data.errors && data.errors.some(e => e.error_type === 'validation'))) {
+                    // Try to find image in root or inside errors
+                    let vUrl = data.validation_image_url;
+                    
+                    if(vUrl) {
+                        valSection.classList.remove('d-none');
+                        valImgDiv.innerHTML = `<img src="${vUrl}" class="rounded border shadow-sm" style="height: 100px; cursor: zoom-in;" onclick="openZoom('${vUrl}')">`;
+                    } else {
+                        valSection.classList.add('d-none');
+                    }
+                } else {
+                    valSection.classList.add('d-none');
+                }
+
+                // --- 1. Render Components ---
                 data.components.forEach(part => {
                     let statusClass = 'border-success'; 
                     if (part.found_quantity == 0) statusClass = 'border-danger';
@@ -451,36 +518,30 @@
                             <div class="history-img-grid">
                     `;
                     
-                    // Handle Fallback logic for images
                     const images = (part.captured_images && part.captured_images.length > 0) ? part.captured_images : (part.last_image_url ? [part.last_image_url] : []);
                     
                     if (images.length > 0) {
                         images.forEach((imgItem, idx) => {
-                            // --- FIX: Handle Object vs String ---
-                            let src = "";
-                            let badgeInfo = "";
-    
-                            if (typeof imgItem === 'string') {
-                                // Old Format: Simple String URL
-                                src = imgItem;
-                            } else if (imgItem && imgItem.image_url) {
-                                // New Format: Rich Object
-                                src = imgItem.image_url;
-                                // Add Confidence if exists
-                                if (imgItem.confidence) {
-                                    const pct = Math.round(imgItem.confidence * 100);
-                                    badgeInfo = ` (${pct}%)`;
-                                }
-                            }
-    
-                            if (src) {
+                             let src = "";
+                             let badgeInfo = "";
+
+                             if (typeof imgItem === 'string') {
+                                 src = imgItem;
+                             } else if (imgItem && imgItem.image_url) {
+                                 src = imgItem.image_url;
+                                 if (imgItem.confidence) {
+                                     const pct = Math.round(imgItem.confidence * 100);
+                                     badgeInfo = ` (${pct}%)`;
+                                 }
+                             }
+                             if (src) {
                                 html += `
                                     <div class="history-img-item" onclick="openZoom('${src}')">
                                         <div class="img-badge">Img ${idx + 1}${badgeInfo}</div>
                                         <img src="${src}">
                                     </div>
                                 `;
-                            }
+                             }
                         });
                     } else {
                         html += `<div class="p-3 text-muted small text-center w-100">No images captured</div>`;
@@ -490,7 +551,7 @@
                     compRow.innerHTML += html;
                 });
     
-                // 2. Render Errors
+                // --- 2. Render Errors ---
                 if (data.errors && data.errors.length > 0) {
                     errSection.classList.remove('d-none');
                     data.errors.forEach(err => {
@@ -526,7 +587,7 @@
         }
     }
 
-    // --- STATE HYDRATION (Run on Page Load) ---
+    // --- STATE HYDRATION ---
     (function checkInitialState() {
         console.log("🔄 Checking initial state from DB...");
         
@@ -541,6 +602,7 @@
             console.warn("⚠️ Active Error Found on Load:", activeError);
             resetOverlays();
             
+            // Re-use logic: 'validation' errors might now have images
             if (activeError.error_type === 'detection') {
                 showRedScreen('detection', activeError.error_details);
             } else if (activeError.error_type === 'validation') {
