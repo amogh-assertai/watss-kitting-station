@@ -551,27 +551,51 @@
                     compRow.innerHTML += html;
                 });
     
-                // --- 2. Render Errors ---
+                // 2. Render Errors (UPDATED)
                 if (data.errors && data.errors.length > 0) {
                     errSection.classList.remove('d-none');
+                    errRow.innerHTML = ''; // Clear previous
+
                     data.errors.forEach(err => {
                         const details = err.error_details || {};
-                        const partName = details.detectedPart || details.detected_part || 'Unknown Object';
                         const reason = err.reason_selected || err.reason || 'Pending Resolution';
                         
+                        // --- A. Determine Badge & Title based on Error Type ---
+                        let badgeText = "WRONG PART";
+                        let titleText = "Unknown Object";
+                        let badgeClass = "bg-danger"; // Red by default
+
+                        if (err.error_type === 'validation') {
+                            // CASE: Punch Machine Validation Failure
+                            badgeText = "MISSING PARTS";
+                            badgeClass = "bg-warning text-dark"; // Yellow/Orange for visibility
+                            
+                            // Build list of missing items
+                            let missingItems = [];
+                            if (details.missing && details.missing.length > 0) missingItems.push(...details.missing);
+                            if (details.undercount && details.undercount.length > 0) missingItems.push(...details.undercount);
+                            
+                            titleText = missingItems.length > 0 ? missingItems.join(", ") : "Validation Failed";
+                        } else {
+                            // CASE: Wrong Part Detection
+                            titleText = details.detectedPart || details.detected_part || details.AiDetectedPartName || 'Unknown Object';
+                        }
+
+                        // --- B. Handle Image ---
                         let imgHtml = '';
                         if (details.imageUrl) {
                             imgHtml = `<img src="${details.imageUrl}" class="rounded mt-2 border" style="height:100px; width:100%; object-fit:contain; background:#fff; cursor:zoom-in" onclick="openZoom('${details.imageUrl}')">`;
                         }
-    
+
+                        // --- C. Render HTML ---
                         errRow.innerHTML += `
                             <div class="col-md-4">
                                 <div class="p-3 rounded border border-danger bg-danger-subtle h-100">
                                     <div class="d-flex justify-content-between align-items-start mb-2">
-                                        <span class="badge bg-danger">WRONG PART</span>
+                                        <span class="badge ${badgeClass}">${badgeText}</span>
                                         <small class="text-danger fw-bold">${new Date(err.timestamp).toLocaleTimeString()}</small>
                                     </div>
-                                    <h6 class="fw-bold text-danger mb-1">${partName}</h6>
+                                    <h6 class="fw-bold text-danger mb-1" style="word-break: break-word;">${titleText}</h6>
                                     <div class="small text-muted mb-2"><strong>Resolution:</strong> ${reason}</div>
                                     ${imgHtml}
                                 </div>

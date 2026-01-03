@@ -510,7 +510,16 @@ def update_detection(table_id):
             }, to=f"table_{table_id}")
             
             current_app.logger.info(f"Wrong Part Detected on Table {table_id}: {detected_part}")
-            return jsonify({"message": "wrong_part", "code": "wrong-part"}), 409
+                # --- UPDATED RESPONSE WITH RICH DATA ---
+            return jsonify({
+                "code": "wrong-part",
+                "message": "wrong_part",
+                "part_name": detected_part,
+                "cam_id": cam_id,
+                "tracking_id": tracking_id,
+                "avg_threshold": confidence,
+                "image_url": image_url
+            }), 409
 
         # ---------------------------------------------------------------------
         # [BLOCK 6] CORRECT PART DETECTED (SUCCESS FLOW)
@@ -585,14 +594,16 @@ def update_detection(table_id):
         }), 500
 
 # --- VALIDATION API (PUNCH MACHINE) ---
+# --- VALIDATION API (PUNCH MACHINE) ---
 @kitting_bp.route('/api/<table_id>/validate_cycle', methods=['POST'])
 def validate_cycle(table_id):
     """
-    Handles the 'Punch Machine' event (Manual Trigger or AI Empty Table).
-    1. Accepts an image of the empty table/punch event.
-    2. Validates if all parts in the current kit are present.
-    3. If VALID: Marks kit as complete, saves history, advances index.
-    4. If INVALID: Triggers 'Validation Error' Red Screen with the image.
+    Handles the 'Punch Machine' event.
+    1. Accepts image + metadata.
+    2. Calculates stats for ALL components (Confidence, Counts).
+    3. Checks for Missing/Undercount.
+    4. If FAIL: Returns rich error details.
+    5. If PASS: Archives kit and returns rich success details.
     """
     try:
         db = get_db()
@@ -601,12 +612,9 @@ def validate_cycle(table_id):
         # [BLOCK 1] FETCH ACTIVITY & CHECK LOCKS
         # ---------------------------------------------------------------------
         activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
-        
         if not activity:
-            current_app.logger.warning(f"Validation attempted on inactive table {table_id}")
             return jsonify({"message": "No active job"}), 404
         
-        # Prevent validation if there is already an active Red Screen
         if activity.get('current_kit_errors_cam1') or activity.get('current_kit_errors_cam2'):
             return jsonify({"message": "System Locked: Resolve Red Screen first"}), 423
 
@@ -616,44 +624,38 @@ def validate_cycle(table_id):
         image_url = None
         data = {}
 
-        # Handle Multipart Request (With Image)
         if 'payload' in request.form:
             raw_payload = request.form.get('payload')
             data = json.loads(raw_payload) if raw_payload else {}
-            
-            # Save the Punch Machine/Empty Table Image
             if 'image' in request.files:
                 file = request.files['image']
                 cam_id_raw = get_safe_cam_id(data.get('camId', ''))
                 kit_idx = activity.get(f'current_kit_index_{cam_id_raw}', 1)
-                
-                # Naming: {ActID}_{CamID}_punch_kit{KitNum}_{Timestamp}.jpg
                 filename = secure_filename(f"{activity['_id']}_{cam_id_raw}_punch_kit{kit_idx}_{int(datetime.utcnow().timestamp())}.jpg")
                 file.save(os.path.join(Config.UPLOAD_FOLDER, filename))
                 image_url = url_for('kitting.get_image', filename=filename)
-        
-        # Fallback: Handle JSON-only request (Legacy/Testing without image)
         elif request.is_json:
             data = request.json
         
         cam_id = get_safe_cam_id(data.get('camId', ''))
+        current_kit_idx = activity.get(f'current_kit_index_{cam_id}', 1)
 
         # ---------------------------------------------------------------------
-        # [BLOCK 3] VALIDATION LOGIC (CHECK MISSING/UNDERCOUNT)
+        # [BLOCK 3] VALIDATION & STATS GENERATION (UNIFIED)
         # ---------------------------------------------------------------------
         components = activity.get('components', [])
         missing = []
         undercount = []
         overcount = []
+        component_details = []
 
         for part in components:
-            # Only check parts assigned to this camera
             if get_safe_cam_id(part.get('camera')) == cam_id:
                 name = part.get('name')
                 req = part.get('quantity', 0)
                 found = part.get('found_quantity', 0)
                 
-                # Logic: Check flags set in Kit Definition
+                # A. Validation Logic
                 if found == 0 and req > 0 and part.get('alert_missing'):
                     missing.append(name)
                 elif found > 0 and found < req and part.get('alert_undercount'):
@@ -661,59 +663,61 @@ def validate_cycle(table_id):
                 elif found > req and part.get('alert_overcount'):
                     overcount.append(name)
 
+                # B. Stats Calculation (Confidence etc.)
+                captures = part.get('captured_images', [])
+                conf_values = []
+                for item in captures:
+                    if isinstance(item, dict) and 'confidence' in item:
+                        try: conf_values.append(float(item['confidence']))
+                        except (ValueError, TypeError): pass
+                
+                avg_conf = 0.0
+                if conf_values: avg_conf = sum(conf_values) / len(conf_values)
+
+                component_details.append({
+                    "part_name": name,
+                    "expected_qty": req,
+                    "detected_qty": found,
+                    "avg_confidence": round(avg_conf, 2),
+                    "capture_count": len(captures)
+                })
+
         # ---------------------------------------------------------------------
-        # [BLOCK 4] FAILURE FLOW (RED SCREEN)
+        # [BLOCK 4] FAILURE FLOW (RICH RESPONSE)
         # ---------------------------------------------------------------------
         if missing or undercount:
-            # Emit socket event with the captured image to show context
+            # Emit Socket Event (Visuals)
             socketio.emit('ui_update', {
                 "type": "validation_error",
                 "missing": missing, 
                 "undercount": undercount, 
                 "overcount": overcount,
                 "camId": cam_id,
-                "imageUrl": image_url  # <--- NEW: Send Image to UI
+                "imageUrl": image_url
             }, to=f"table_{table_id}")
             
-            # Log the attempt? Optional.
+            # Return Rich JSON
             return jsonify({
                 "message": "part-missing", 
-                "details": {"missing": missing, "undercount": undercount}
+                "details": {
+                    "kit_number": current_kit_idx,
+                    "cam_id": cam_id,
+                    "status": "validation_failed",
+                    "validation_image": image_url,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "missing": missing,
+                    "undercount": undercount,
+                    "overcount": overcount,
+                    "components_summary": component_details # <--- Full stats included here
+                }
             }), 200
 
         # ---------------------------------------------------------------------
         # [BLOCK 5] SUCCESS FLOW (COMPLETE KIT)
         # ---------------------------------------------------------------------
-        
-        # 1. Setup Context
-        current_kit_idx = activity.get(f'current_kit_index_{cam_id}', 1)
         warning_status = "overcount" if overcount else None
         
-        # --- A. Generate Component Summary ---
-        component_details = []
-        cam_parts = [p for p in activity['components'] if get_safe_cam_id(p.get('camera')) == cam_id]
-        
-        for part in cam_parts:
-            captures = part.get('captured_images', [])
-            conf_values = []
-            for item in captures:
-                if isinstance(item, dict) and 'confidence' in item:
-                    try: conf_values.append(float(item['confidence']))
-                    except (ValueError, TypeError): pass
-            
-            avg_conf = 0.0
-            if conf_values: avg_conf = sum(conf_values) / len(conf_values)
-
-            component_details.append({
-                "part_name": part.get('name'),
-                "expected_qty": part.get('quantity', 0),
-                "detected_qty": part.get('found_quantity', 0),
-                "avg_confidence": round(avg_conf, 2),
-                "capture_count": len(captures)
-            })
-
-        # --- B. Generate Error/Anomaly Summary (NEW) ---
-        # Fetch all errors that were logged (resolved) for this specific kit & camera
+        # Fetch Resolved Errors for History
         resolved_errors_cursor = db.error_logs.find({
             "activity_id": activity['_id'],
             "kit_number": current_kit_idx,
@@ -723,37 +727,25 @@ def validate_cycle(table_id):
         anomalies_summary = []
         for err in resolved_errors_cursor:
             details = err.get('error_details', {})
+            wrong_obj = details.get('detectedPart') or details.get('AiDetectedPartName') or "Unknown"
+            if err.get('error_type') == 'validation': wrong_obj = "Validation Failure"
             
-            # Determine the name of the wrong object
-            # Priority: DetectedPart (Logic) -> AiDetectedPartName (Raw) -> "Unknown"
-            wrong_obj_name = details.get('detectedPart') or details.get('AiDetectedPartName') or "Unknown Object"
-            
-            # If it was a validation error (missing parts), list them
-            if err.get('error_type') == 'validation':
-                missing_list = details.get('missing', [])
-                wrong_obj_name = f"Missing: {', '.join(missing_list)}" if missing_list else "Validation Failure"
-
             anomalies_summary.append({
-                "type": err.get('error_type'),          # 'detection' or 'validation'
-                "object_detected": wrong_obj_name,      # What triggered it
-                "resolution_reason": err.get('reason_selected'), # Why it was cleared
-                "timestamp": err.get('timestamp').isoformat() if isinstance(err.get('timestamp'), datetime) else str(err.get('timestamp')),
-                "ai_confidence": details.get('avgThreshold'),    # If available
-                "tracking_id": details.get('Tracking_id')        # If available
+                "type": err.get('error_type'),
+                "object_detected": wrong_obj,
+                "resolution_reason": err.get('reason_selected'),
+                "timestamp": str(err.get('timestamp')),
+                "ai_confidence": details.get('avgThreshold'),
+                "tracking_id": details.get('Tracking_id')
             })
 
-        # 2. Perform DB Updates & Archival
         perform_camera_completion(
-            activity, 
-            db, 
-            table_id, 
-            cam_id, 
-            warning_type=warning_status,
-            validation_image=image_url 
+            activity, db, table_id, cam_id, 
+            warning_type=warning_status, 
+            validation_image=image_url
         )
         
-        # 3. Return Rich Response
-        current_app.logger.info(f"Kit {current_kit_idx} completed on {cam_id}. Sending full summary.")
+        current_app.logger.info(f"Kit {current_kit_idx} completed on {cam_id}")
         
         return jsonify({
             "message": "kit-completed",
@@ -765,10 +757,9 @@ def validate_cycle(table_id):
                 "completed_at": datetime.utcnow().isoformat(),
                 "warnings": overcount if overcount else [],
                 "components_summary": component_details,
-                "anomalies_resolved": anomalies_summary # <--- The requested error history
+                "anomalies_resolved": anomalies_summary
             }
         }), 200
-        
 
     except Exception as e:
         current_app.logger.error(f"Error in validate_cycle: {str(e)}")
