@@ -31,13 +31,21 @@
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('kitting.index') }}">Kitting Activities</a>
                     </li>
+                    
                     <li class="nav-item">
                         <a class="nav-link active" href="{{ url_for('parts.list_kits') }}">Parts Management</a>
                     </li>
+                    
                 </ul>
             </div>
         </div>
     </nav>
+
+    <!-- 
+    <li class="nav-item">
+        <a class="nav-link active" href="{{ url_for('parts.list_kits') }}">Parts Management</a>
+    </li>
+    -->
 
     <div class="{% block container_class %}container{% endblock %} my-5 flex-grow-1">
         {% with messages = get_flashed_messages(with_categories=true) %}
