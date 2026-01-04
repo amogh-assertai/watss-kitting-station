@@ -1198,9 +1198,15 @@ from reportlab.lib.units import inch
 from flask import send_file, current_app, jsonify
 from bson import ObjectId
 
-# --- CONFIGURATION ---
-# Use 127.0.0.1 to avoid browser security blocks on 'localhost'
-VM_BASE_URL = "http://127.0.0.1:5000"
+# --- IMPORT CONFIG ---
+from app.config import Config
+
+# 1. GET URL FROM CONFIG (Dynamic)
+VM_BASE_URL = Config.SOCKET_SERVER_URL
+# Fallback if config is missing (optional safety)
+if not VM_BASE_URL:
+    VM_BASE_URL = "http://localhost:5000"
+
 
 # --- HELPER: Build PDF Content for One Camera ---
 def build_camera_pdf_section(activity_id, camera_key, db, styles):
