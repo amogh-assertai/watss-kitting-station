@@ -16,6 +16,8 @@ class Config:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'captures')
     
+    os.makedirs(UPLOAD_FOLDER,exist_ok=1)
+    
     
     # S3 CONFIG (Placeholder for future)
     USE_S3 = False
