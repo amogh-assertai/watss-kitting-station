@@ -14,6 +14,10 @@ import traceback
 
 from bson.errors import InvalidId # Import at top
 
+import pandas as pd
+import io
+from flask import send_file
+
 kitting_bp = Blueprint('kitting', __name__, url_prefix='/kitting')
 
 # --- HELPER: NORMALIZE CAM ID ---
@@ -29,6 +33,43 @@ def index():
     db = get_db()
     active_jobs = list(db.activities.find({"status": "on-going"}))
     return render_template('kitting.html', active_jobs=active_jobs)
+
+# --- NEW ROUTE: HANDLE SETUP IMAGE UPLOADS ---
+@kitting_bp.route('/upload_setup_image', methods=['POST'])
+def upload_setup_image():
+    try:
+        if 'image' not in request.files:
+            return jsonify({'status': 'error', 'message': 'No image file provided'}), 400
+            
+        file = request.files['image']
+        cam_type = request.form.get('cam_type', 'cam1') # 'cam1' or 'cam2'
+        table_id = request.form.get('table_id', 'unknown')
+
+        # 1. Determine Sub-folder based on camera
+        subfolder = "cam1_images" if "1" in cam_type else "cam2_images"
+        save_dir = os.path.join(Config.UPLOAD_FOLDER, subfolder)
+
+        # 2. Create folder if not exists
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
+        # 3. Save File
+        timestamp = int(datetime.utcnow().timestamp())
+        filename = secure_filename(f"setup_{table_id}_{cam_type}_{timestamp}.jpg")
+        file_path = os.path.join(save_dir, filename)
+        
+        file.save(file_path)
+
+        # 4. Return the Web URL
+        # We assume your static folder is serving '/static/captures'
+        # The URL structure: /static/captures/cam1_images/filename.jpg
+        web_url = f"/static/captures/{subfolder}/{filename}"
+        
+        return jsonify({'status': 'success', 'imageUrl': web_url})
+
+    except Exception as e:
+        current_app.logger.error(f"Setup Upload Error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @kitting_bp.route('/history')
 def history_index():
@@ -904,3 +945,428 @@ def get_kit_history_details(activity_id, cam_id, kit_number):
     except Exception as e:
         current_app.logger.error(f"History API Error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+    
+    
+# --- GET ACTIVE ERROR DETAILS (LOCK STATUS) ---
+@kitting_bp.route('/api/<table_id>/active_errors', methods=['GET'])
+def get_active_errors(table_id):
+    """
+    Returns the current lock status and detailed errors for an active job.
+    Used to populate error popups or external status displays.
+    """
+    try:
+        db = get_db()
+        
+        # 1. Find the active job
+        activity = db.activities.find_one({"table_id": str(table_id), "status": "on-going"})
+        if not activity:
+            return jsonify({
+                "locked": False, 
+                "message": "No active job running"
+            }), 200
+
+        # 2. Check for errors across standard cameras
+        active_errors = {}
+        is_locked = False
+        
+        # List the database keys where errors are stored
+        error_keys = ['current_kit_errors_cam1', 'current_kit_errors_cam2']
+        
+        for key in error_keys:
+            # specific_errors is a list of error objects
+            specific_errors = activity.get(key, [])
+            if specific_errors:
+                is_locked = True
+                # Extract clean camera name (e.g., 'cam1')
+                cam_name = key.replace('current_kit_errors_', '')
+                active_errors[cam_name] = specific_errors
+
+        # 3. Return the status
+        return jsonify({
+            "locked": is_locked,
+            "table_id": table_id,
+            "kit_number": activity.get('current_kit_index_cam1', 1), # Context
+            "errors": active_errors
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error fetching active errors: {str(e)}")
+        return jsonify({"message": "Internal Error", "error": str(e)}), 500
+    
+    
+    
+# --- HELPER: Build the "Kit Header + Detection Table + Errors" structure ---
+def build_camera_data(activity_id, camera_key, db):
+    # 1. Fetch History
+    history_cursor = db.kit_history.find({
+        "activity_id": ObjectId(activity_id),
+        "camera_id": camera_key
+    }).sort("kit_number", 1)
+    
+    # 2. Fetch Errors (Look for errors matching this camera)
+    error_cursor = db.error_logs.find({
+        "activity_id": ObjectId(activity_id),
+        "$or": [{"camera_id": camera_key}, {"camId": camera_key}, {"cam_id": camera_key}]
+    })
+
+    # 3. Organize Data
+    history_map = {h.get('kit_number'): h for h in history_cursor}
+    error_map = {}
+    for err in error_cursor:
+        k_num = err.get('kit_number')
+        if k_num:
+            if k_num not in error_map: error_map[k_num] = []
+            error_map[k_num].append(err)
+
+    all_kits = sorted(set(history_map.keys()) | set(error_map.keys()))
+    excel_rows = []
+
+    for k_num in all_kits:
+        hist = history_map.get(k_num, {})
+        errs = error_map.get(k_num, [])
+
+        # ==========================================
+        # SECTION 1: KIT HEADER
+        # ==========================================
+        start_time = hist.get('completed_at') or hist.get('timestamp') or "N/A"
+        if errs:
+            status = "⚠ Issues Found"
+            perf = f"Operator fixed {len(errs)} error(s)"
+        else:
+            status = "✅ Perfect"
+            perf = "First Pass Yield"
+
+        excel_rows.append({
+            "Col_A": f"KIT {k_num}",
+            "Col_B": f"Time: {start_time}",
+            "Col_C": f"Status: {status}",
+            "Col_D": f"Perf: {perf}"
+        })
+
+        # ==========================================
+        # SECTION 2: DETECTED OBJECTS TABLE
+        # ==========================================
+        excel_rows.append({
+            "Col_A": "TRACKING ID",
+            "Col_B": "OBJECT NAME",
+            "Col_C": "CONFIDENCE",
+            "Col_D": "IMAGE URL"
+        })
+
+        components = hist.get('components_snapshot', [])
+        found_any_detection = False
+
+        if components:
+            for part in components:
+                captures = part.get('captured_images', [])
+                if isinstance(captures, dict): captures = list(captures.values())
+
+                for cap in captures:
+                    found_any_detection = True
+                    t_id = cap.get('tracking_id', 'N/A')
+                    name = cap.get('ai_class_name') or part.get('name')
+                    conf = cap.get('confidence', 0)
+                    img = cap.get('image_url', '')
+
+                    excel_rows.append({
+                        "Col_A": str(t_id),
+                        "Col_B": name,
+                        "Col_C": f"{float(conf):.4f}",
+                        "Col_D": img
+                    })
+
+        if not found_any_detection:
+            excel_rows.append({"Col_A": "No Object Data Recorded", "Col_B": "", "Col_C": "", "Col_D": ""})
+
+        # Spacer before errors
+        excel_rows.append({}) 
+
+        # ==========================================
+        # SECTION 3: ERRORS & ANOMALIES (New)
+        # ==========================================
+        if errs:
+            # Header for Errors
+            excel_rows.append({
+                "Col_A": "ERROR TYPE",
+                "Col_B": "DETAILS / MISSING",
+                "Col_C": "RESOLUTION REASON",
+                "Col_D": "EVIDENCE IMAGE"
+            })
+
+            for err in errs:
+                # Extract details
+                e_type = err.get('error_type', 'Unknown')
+                reason = err.get('reason_selected', 'Pending')
+                timestamp = err.get('timestamp', '')
+                
+                # specific details based on error type
+                details_obj = err.get('error_details', {})
+                desc = ""
+                
+                if e_type == 'validation':
+                    missing = details_obj.get('missing', [])
+                    undercount = details_obj.get('undercount', [])
+                    desc_parts = []
+                    if missing: desc_parts.append(f"Missing: {','.join(missing)}")
+                    if undercount: desc_parts.append(f"Undercount: {','.join(undercount)}")
+                    desc = " | ".join(desc_parts) if desc_parts else "Validation Failed"
+                else:
+                    # Anomaly / Wrong Part
+                    detected = details_obj.get('detectedPart') or details_obj.get('AiDetectedPartName')
+                    msg = details_obj.get('message', 'Wrong Part')
+                    desc = f"{msg} (Detected: {detected})"
+
+                # Image (check nested or root)
+                e_img = details_obj.get('imageUrl') or err.get('imageUrl') or ""
+
+                excel_rows.append({
+                    "Col_A": e_type.upper(),
+                    "Col_B": desc,
+                    "Col_C": reason,
+                    "Col_D": e_img
+                })
+
+        # ==========================================
+        # SPACER BETWEEN KITS
+        # ==========================================
+        excel_rows.append({}) 
+        excel_rows.append({}) 
+
+    return excel_rows
+
+# --- MAIN ROUTE ---
+@kitting_bp.route('/api/download_report/<activity_id>', methods=['GET'])
+def download_excel_report(activity_id):
+    try:
+        db = get_db()
+        
+        # 1. Build Data
+        data_cam1 = build_camera_data(activity_id, "cam1", db)
+        data_cam2 = build_camera_data(activity_id, "cam2", db)
+        
+        # 2. Create Excel
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            
+            # Helper to write sheet and format
+            def write_sheet(data, sheet_name):
+                df = pd.DataFrame(data)
+                if not df.empty:
+                    df.to_excel(writer, index=False, header=False, sheet_name=sheet_name)
+                    ws = writer.sheets[sheet_name]
+                    ws.column_dimensions['A'].width = 20
+                    ws.column_dimensions['B'].width = 40 # Wider for Object Name / Error Details
+                    ws.column_dimensions['C'].width = 25 # Resolution
+                    ws.column_dimensions['D'].width = 60 # Image URL
+                else:
+                    pd.DataFrame(["No Data"]).to_excel(writer, sheet_name=sheet_name)
+
+            write_sheet(data_cam1, 'Camera 1')
+            write_sheet(data_cam2, 'Camera 2')
+
+        output.seek(0)
+        filename = f"Kitting_Report_{activity_id}.xlsx"
+
+        return send_file(
+            output, 
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True, 
+            download_name=filename
+        )
+
+    except Exception as e:
+        current_app.logger.error(f"Excel Error: {e}")
+        return jsonify({"message": "Failed to generate report", "error": str(e)}), 500
+    
+    
+    
+    
+    
+    
+
+
+
+
+
+
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from flask import send_file, current_app, jsonify
+from bson import ObjectId
+
+# --- CONFIGURATION ---
+# Use 127.0.0.1 to avoid browser security blocks on 'localhost'
+VM_BASE_URL = "http://127.0.0.1:5000"
+
+# --- HELPER: Build PDF Content for One Camera ---
+def build_camera_pdf_section(activity_id, camera_key, db, styles):
+    elements = []
+    
+    # Header for Camera Section
+    elements.append(Paragraph(f"Report for {camera_key.upper()}", styles['Heading2']))
+    elements.append(Spacer(1, 12))
+
+    # Fetch Data
+    history_cursor = db.kit_history.find({"activity_id": ObjectId(activity_id), "camera_id": camera_key}).sort("kit_number", 1)
+    history_map = {h.get('kit_number'): h for h in history_cursor}
+    
+    error_cursor = db.error_logs.find({"activity_id": ObjectId(activity_id), "$or": [{"camera_id": camera_key}, {"camId": camera_key}, {"cam_id": camera_key}]})
+    error_map = {}
+    for err in error_cursor:
+        k_num = err.get('kit_number')
+        if k_num:
+            if k_num not in error_map: error_map[k_num] = []
+            error_map[k_num].append(err)
+
+    all_kits = sorted(set(history_map.keys()) | set(error_map.keys()))
+
+    if not all_kits:
+        elements.append(Paragraph("No data recorded for this camera.", styles['Normal']))
+        return elements
+
+    # --- LOOP KITS ---
+    for k_num in all_kits:
+        hist = history_map.get(k_num, {})
+        errs = error_map.get(k_num, [])
+
+        # 1. Kit Status Header
+        status = "Completed"
+        color = "green"
+        if errs: 
+            status = f"Issues Found (Fixed {len(errs)})"
+            color = "red"
+        
+        elements.append(Paragraph(f"<b>KIT {k_num}</b> - <font color='{color}'>{status}</font>", styles['Heading3']))
+        
+        timestamp = hist.get('completed_at') or hist.get('timestamp') or "N/A"
+        elements.append(Paragraph(f"Time: {timestamp}", styles['Normal']))
+        elements.append(Spacer(1, 6))
+
+        # 2. Detections Table (NOW WITH IMAGES)
+        # Columns: ID, Name, Conf, Image Link
+        data = [['Tracking ID', 'Object Name', 'Confidence', 'Image']]
+        
+        components = hist.get('components_snapshot', [])
+        found_detections = False
+
+        if components:
+            for part in components:
+                captures = part.get('captured_images', [])
+                if isinstance(captures, dict): captures = list(captures.values())
+                
+                for cap in captures:
+                    found_detections = True
+                    
+                    # Generate Link for Detection
+                    img_path = cap.get('image_url', '')
+                    link_text = "-"
+                    if img_path:
+                        full_url = f"{VM_BASE_URL}{img_path}"
+                        link_text = Paragraph(f'<a href="{full_url}" color="blue"><u>Open</u></a>', styles['Normal'])
+
+                    data.append([
+                        str(cap.get('tracking_id', '-')),
+                        cap.get('ai_class_name') or part.get('name', 'Unknown'),
+                        f"{float(cap.get('confidence', 0)):.2f}",
+                        link_text
+                    ])
+        
+        if found_detections:
+            t = Table(data, colWidths=[1.2*inch, 2.0*inch, 1.2*inch, 1.2*inch])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+                ('GRID', (0,0), (-1,-1), 1, colors.black),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('FONTSIZE', (0,0), (-1,-1), 10),
+            ]))
+            elements.append(t)
+        else:
+            elements.append(Paragraph("No detections recorded.", styles['Italic']))
+        
+        elements.append(Spacer(1, 6))
+
+        # 3. VALIDATION IMAGE (The Final Proof)
+        val_img = hist.get('validation_image_url')
+        if val_img:
+            val_url = f"{VM_BASE_URL}{val_img}"
+            elements.append(Paragraph(f'<b>Validation Proof:</b> <a href="{val_url}" color="blue"><u>Open Final Image</u></a>', styles['Normal']))
+            elements.append(Spacer(1, 6))
+
+        # 4. ERRORS & LINKS
+        if errs:
+            elements.append(Spacer(1, 4))
+            elements.append(Paragraph("<b>Errors & Anomalies:</b>", styles['Normal']))
+            
+            error_table_data = [['Type', 'Reason', 'Image Link']]
+            
+            for err in errs:
+                details = err.get('error_details', {})
+                img_path = details.get('imageUrl') or err.get('imageUrl') or ""
+                
+                link_text = "No Image"
+                if img_path:
+                    full_url = f"{VM_BASE_URL}{img_path}"
+                    link_text = Paragraph(f'<a href="{full_url}" color="blue"><u>Open Image</u></a>', styles['Normal'])
+                
+                error_table_data.append([
+                    err.get('error_type', 'Error'),
+                    err.get('reason_selected', 'Pending'),
+                    link_text
+                ])
+
+            et = Table(error_table_data, colWidths=[1.5*inch, 2*inch, 2*inch])
+            et.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.mistyrose),
+                ('GRID', (0,0), (-1,-1), 1, colors.red),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ]))
+            elements.append(et)
+        
+        # Divider Line
+        elements.append(Spacer(1, 10))
+        elements.append(Paragraph("_" * 65, styles['Normal']))
+        elements.append(Spacer(1, 15))
+
+    return elements
+
+# --- MAIN PDF ROUTE ---
+@kitting_bp.route('/api/download_pdf/<activity_id>', methods=['GET'])
+def download_pdf_report(activity_id):
+    try:
+        db = get_db()
+        output = io.BytesIO()
+        doc = SimpleDocTemplate(output, pagesize=A4)
+        styles = getSampleStyleSheet()
+        story = []
+
+        # Title
+        story.append(Paragraph(f"Kitting Report: {activity_id}", styles['Title']))
+        story.append(Paragraph(f"Image Source: {VM_BASE_URL}", styles['Normal']))
+        story.append(Spacer(1, 12))
+
+        # Camera 1 Section
+        story.extend(build_camera_pdf_section(activity_id, "cam1", db, styles))
+        story.append(PageBreak()) 
+
+        # Camera 2 Section
+        story.extend(build_camera_pdf_section(activity_id, "cam2", db, styles))
+
+        # Build PDF
+        doc.build(story)
+        output.seek(0)
+        
+        return send_file(
+            output,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f"Report_{activity_id}.pdf"
+        )
+
+    except Exception as e:
+        current_app.logger.error(f"PDF Error: {e}")
+        return jsonify({"message": "Failed to generate PDF", "error": str(e)}), 500

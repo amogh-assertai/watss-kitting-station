@@ -64,6 +64,16 @@
                                 class="btn btn-sm btn-outline-primary fw-bold">
                                     View Report <i class="fas fa-arrow-right ms-2"></i>
                                 </a>
+
+                                <a href="/kitting/api/download_report/{{ job._id }}" 
+                                    class="btn btn-success btn-sm">
+                                    <i class="bi bi-file-earmark-spreadsheet"></i> Download Report
+                                </a>
+
+                                <a href="/kitting/api/download_pdf/{{ job._id }}" 
+                                    class="btn btn-danger btn-sm">
+                                    <i class="bi bi-file-earmark-pdf"></i> PDF
+                                </a>
                             </td>
                         </tr>
                         {% else %}
