@@ -1000,6 +1000,8 @@ def get_active_errors(table_id):
 ######## on-demand APIS starts #######################
 
 
+from bson import json_util
+
 # --- GET FULL ON-GOING ACTIVITY DETAILS ---
 @kitting_bp.route('/api/table_status/<table_id>', methods=['GET'])
 def get_ongoing_activity_details(table_id):
