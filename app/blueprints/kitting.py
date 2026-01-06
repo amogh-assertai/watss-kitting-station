@@ -994,6 +994,55 @@ def get_active_errors(table_id):
         return jsonify({"message": "Internal Error", "error": str(e)}), 500
     
     
+######## on-demand APIS starts #######################
+######## on-demand APIS starts #######################
+######## on-demand APIS starts #######################
+######## on-demand APIS starts #######################
+
+
+# --- GET FULL ON-GOING ACTIVITY DETAILS ---
+@kitting_bp.route('/api/table_status/<table_id>', methods=['GET'])
+def get_ongoing_activity_details(table_id):
+    """
+    Returns the complete MongoDB document for the currently running activity.
+    Includes configuration, component lists, and current error states.
+    """
+    try:
+        db = get_db()
+        
+        # 1. Fetch the raw document
+        activity = db.activities.find_one({
+            "table_id": str(table_id), 
+            "status": "on-going"
+        })
+        
+        if not activity:
+            return jsonify({
+                "status": "IDLE", 
+                "message": "No active job found for this table."
+            }), 404
+
+        # 2. Serialize BSON to JSON
+        # MongoDB documents contain ObjectIds and Datetimes which break standard flask.jsonify
+        # We use json_util to convert them to strings/ISO format safely.
+        activity_json = json.loads(json_util.dumps(activity))
+        
+        # 3. Return the whole data
+        return jsonify(activity_json), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error fetching activity details: {str(e)}")
+        return jsonify({"message": "Internal Error", "error": str(e)}), 500
+
+
+
+######## on-demand APIS ENDS #######################
+######## on-demand APIS ENDS #######################
+######## on-demand APIS ENDS #######################
+######## on-demand APIS ENDS #######################
+
+    
+    
     
 # --- HELPER: Build the "Kit Header + Detection Table + Errors" structure ---
 def build_camera_data(activity_id, camera_key, db):
