@@ -735,44 +735,44 @@
         if (timers[targetCam]) clearTimeout(timers[targetCam]);
 
         if (data.type === 'refresh_needed') {
-            // ============================================================
-            // [START] NEW CHANGES: Red Screen Priority Check
-            // ============================================================
-            // 1. Check if Red Screen is active. If yes, ignore green popup.
-            // (Assuming your red screen elements have these IDs based on 'showRedScreen' logic)
+            // 1. RED SCREEN PRIORITY CHECK
             const redDet = document.getElementById('detection-error-overlay');
             const redVal = document.getElementById('validation-error-overlay');
-
-            // If either red screen is visible (display is not 'none'), STOP here.
             if ((redDet && redDet.style.display !== 'none') || (redVal && redVal.style.display !== 'none')) {
-                return;
+                return; // Stop if red screen is visible
             }
-            // ============================================================
-            // [END] NEW CHANGES
-            // ============================================================
 
-            // ============================================================
-            // [START] LOGIC CHANGE: Independent Camera Handling
-            // ============================================================
-
-            // 1. Clear ONLY the timer for THIS specific camera. 
-            // This closes/resets Cam1 without touching Cam2.
-            if (timers[targetCam]) clearTimeout(timers[targetCam]);
-
-            // Note: We do NOT call resetOverlays() here. 
-            // This ensures if Cam2 is open, it stays open while Cam1 updates.
+            // 2. STOP OLD TIMER (Cancel the reload from the previous item)
+            if (timers[targetCam]) {
+                clearTimeout(timers[targetCam]);
+                timers[targetCam] = null;
+            }
 
             const p = data.popup_data;
             const imgUrl = p.imageUrl + "?t=" + new Date().getTime();
-            overlay.className = `side-popup theme-green`; overlay.style.display = 'flex';
+
+            // ============================================================
+            // [START] NEW CHANGE: Force Visual "Blink" / Reflow
+            // ============================================================
+            // We briefly hide the element or strip its class to force the browser 
+            // to treat this as a BRAND NEW popup, not just an text update.
+            overlay.style.display = 'none';
+            overlay.className = ''; // Reset class
+
+            // This line triggers a "Reflow" (tells browser to apply changes instantly)
+            void overlay.offsetWidth;
+
+            // Now apply the class and show it again
+            overlay.className = `side-popup theme-green`;
+            overlay.style.display = 'flex';
+            // ============================================================
+            // [END] NEW CHANGE
+            // ============================================================
+
             overlay.innerHTML = `<div class="popup-img-container"><img src="${imgUrl}" alt="Detected"></div><div class="d-flex align-items-center justify-content-between w-100 p-2"><div class="d-flex align-items-center gap-3"><i class="fas fa-check-circle fa-3x popup-icon"></i><div><h6 class="opacity-75 fw-bold text-uppercase m-0 small ls-1">Detected</h6><h2 class="fw-bold m-0" style="font-size: 2.2rem;">${p.part_name}</h2></div></div><div class="popup-badge rounded-pill px-4 py-2 fw-bold fs-4 shadow-sm">Qty: ${p.found_qty} / ${p.required_qty}</div></div>`;
 
-            // 2. Start new timer ONLY for this camera
+            // 3. START NEW TIMER
             timers[targetCam] = setTimeout(() => window.location.reload(), 2000);
-
-            // ============================================================
-            // [END] LOGIC CHANGE
-            // ============================================================
         }
         else if (data.type === 'kit_completed' || data.type === 'kit_completed_with_warning') {
             const isWarning = (data.type === 'kit_completed_with_warning');
