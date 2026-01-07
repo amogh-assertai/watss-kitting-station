@@ -708,8 +708,6 @@
     let currentErrorType = null;
     let currentErrorData = null;
     let currentHistoryCam = null;
-
-    // We only need timers for the Page Reload, not the UI blinking
     let timers = { cam1: null, cam2: null };
 
     function resetOverlays() {
@@ -746,12 +744,10 @@
         const overlayId = `overlay-${targetCam}`;
         const overlay = document.getElementById(overlayId);
 
-        // 1. Always clear the reload timer for THIS camera immediately
-        // This prevents the page from reloading if a new scan comes in quickly
+        // ALWAYS clear the timer immediately on new data
         if (timers[targetCam]) { clearTimeout(timers[targetCam]); timers[targetCam] = null; }
 
         if (data.type === 'refresh_needed') {
-            // Check Red Screen Priority
             const redDet = document.getElementById('detection-error-overlay');
             const redVal = document.getElementById('validation-error-overlay');
             if ((redDet && redDet.style.display !== 'none') || (redVal && redVal.style.display !== 'none')) {
@@ -762,31 +758,29 @@
             const imgUrl = p.imageUrl + "?t=" + new Date().getTime();
 
             // ============================================================
-            // [START] FIX: Synchronous Animation Trigger (No delays)
+            // [START] CHANGE: 1 Second Timer & Hard Blink
             // ============================================================
 
-            // 1. Update Content immediately
+            // 1. Hard Hide first (Ensures browser sees a "remove")
+            overlay.style.display = 'none';
+            overlay.classList.remove('animate-pop');
+
+            // 2. Update Content
             overlay.innerHTML = `<div class="popup-img-container"><img src="${imgUrl}" alt="Detected"></div><div class="d-flex align-items-center justify-content-between w-100 p-2"><div class="d-flex align-items-center gap-3"><i class="fas fa-check-circle fa-3x popup-icon"></i><div><h6 class="opacity-75 fw-bold text-uppercase m-0 small ls-1">Detected</h6><h2 class="fw-bold m-0" style="font-size: 2.2rem;">${p.part_name}</h2></div></div><div class="popup-badge rounded-pill px-4 py-2 fw-bold fs-4 shadow-sm">Qty: ${p.found_qty} / ${p.required_qty}</div></div>`;
 
-            // 2. Reset Animation
-            // We remove the class, force the browser to calculate layout, then add it back.
-            // This restarts the CSS animation instantly.
-            overlay.classList.remove('animate-pop');
-            overlay.style.display = 'flex'; // Ensure it's visible
-
-            // This magic line forces the browser to recognize the change
+            // 3. Force Reflow (Crucial for the "pop" effect on rapid scans)
             void overlay.offsetWidth;
 
-            // 3. Apply classes
+            // 4. Show & Animate
             overlay.className = `side-popup theme-green animate-pop`;
             overlay.style.display = 'flex';
 
-            // ============================================================
-            // [END] FIX
-            // ============================================================
+            // 5. Timer set to 1000ms (1 Second) as requested
+            timers[targetCam] = setTimeout(() => window.location.reload(), 1000);
 
-            // 4. Start Reload Timer (2 seconds from NOW)
-            timers[targetCam] = setTimeout(() => window.location.reload(), 2000);
+            // ============================================================
+            // [END] CHANGE
+            // ============================================================
         }
         else if (data.type === 'kit_completed' || data.type === 'kit_completed_with_warning') {
             const isWarning = (data.type === 'kit_completed_with_warning');
@@ -794,7 +788,8 @@
             const iconClass = isWarning ? 'fa-exclamation-triangle' : 'fa-box-open';
             const titleText = isWarning ? 'OVERCOUNT DETECTED' : 'KIT COMPLETED';
 
-            // Same animation logic for completion
+            // Same hard reset for kit completion
+            overlay.style.display = 'none';
             overlay.classList.remove('animate-pop');
             void overlay.offsetWidth;
 
@@ -825,9 +820,7 @@
         }
     });
 
-    // ... (Keep the rest of your functions: showRedScreen, etc. exactly the same) ...
-    // [Paste the rest of the existing script logic here]
-
+    // ... (Keep existing showRedScreen, submitResolution, etc.) ...
     function showRedScreen(type, data) {
         currentErrorType = type; currentErrorData = data;
         const overlay = document.getElementById('kit-error-overlay');
