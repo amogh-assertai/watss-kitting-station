@@ -452,6 +452,23 @@
             opacity: 1;
         }
     }
+
+    /* ADD THIS ANIMATION */
+    @keyframes popIn {
+        0% {
+            transform: translateY(-50%) scale(0.8);
+            opacity: 0;
+        }
+
+        100% {
+            transform: translateY(-50%) scale(1);
+            opacity: 1;
+        }
+    }
+
+    .animate-pop {
+        animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
 </style>
 
 <div id="overlay-cam1" class="side-popup theme-green"></div>
@@ -691,27 +708,18 @@
     let currentErrorType = null;
     let currentErrorData = null;
     let currentHistoryCam = null;
+
+    // We only need timers for the Page Reload, not the UI blinking
     let timers = { cam1: null, cam2: null };
-    let pendingReloadTimer = null;
 
-    // We add a separate object to track the "Blink" timers to prevent conflicts
-    let uiTimers = { cam1: null, cam2: null };
-
-    // --- HELPER: RESET OVERLAYS ---
     function resetOverlays() {
-        if (pendingReloadTimer) { clearTimeout(pendingReloadTimer); pendingReloadTimer = null; }
         if (timers.cam1) { clearTimeout(timers.cam1); timers.cam1 = null; }
         if (timers.cam2) { clearTimeout(timers.cam2); timers.cam2 = null; }
-
-        // Clear UI blink timers too
-        if (uiTimers.cam1) { clearTimeout(uiTimers.cam1); uiTimers.cam1 = null; }
-        if (uiTimers.cam2) { clearTimeout(uiTimers.cam2); uiTimers.cam2 = null; }
 
         const ids = ['overlay-cam1', 'overlay-cam2', 'kit-error-overlay', 'job-completion-overlay', 'zoom-overlay'];
         ids.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
     }
 
-    // --- ZOOM FUNCTIONS ---
     function openZoom(src) { document.getElementById('zoom-img').src = src; document.getElementById('zoom-overlay').style.display = 'flex'; }
     function closeZoom() { document.getElementById('zoom-overlay').style.display = 'none'; }
 
@@ -738,14 +746,12 @@
         const overlayId = `overlay-${targetCam}`;
         const overlay = document.getElementById(overlayId);
 
-        // Clear existing Reload Timer for THIS camera immediately
+        // 1. Always clear the reload timer for THIS camera immediately
+        // This prevents the page from reloading if a new scan comes in quickly
         if (timers[targetCam]) { clearTimeout(timers[targetCam]); timers[targetCam] = null; }
 
-        // Clear existing UI Blink Timer for THIS camera
-        if (uiTimers[targetCam]) { clearTimeout(uiTimers[targetCam]); uiTimers[targetCam] = null; }
-
         if (data.type === 'refresh_needed') {
-            // 1. RED SCREEN PRIORITY CHECK
+            // Check Red Screen Priority
             const redDet = document.getElementById('detection-error-overlay');
             const redVal = document.getElementById('validation-error-overlay');
             if ((redDet && redDet.style.display !== 'none') || (redVal && redVal.style.display !== 'none')) {
@@ -756,87 +762,81 @@
             const imgUrl = p.imageUrl + "?t=" + new Date().getTime();
 
             // ============================================================
-            // [START] CHANGE: Visual Blink Logic
+            // [START] FIX: Synchronous Animation Trigger (No delays)
             // ============================================================
 
-            // 1. Hide the overlay immediately. 
-            // This ensures the "Old" popup is gone.
-            overlay.style.display = 'none';
-            overlay.className = ''; // Strip classes
+            // 1. Update Content immediately
+            overlay.innerHTML = `<div class="popup-img-container"><img src="${imgUrl}" alt="Detected"></div><div class="d-flex align-items-center justify-content-between w-100 p-2"><div class="d-flex align-items-center gap-3"><i class="fas fa-check-circle fa-3x popup-icon"></i><div><h6 class="opacity-75 fw-bold text-uppercase m-0 small ls-1">Detected</h6><h2 class="fw-bold m-0" style="font-size: 2.2rem;">${p.part_name}</h2></div></div><div class="popup-badge rounded-pill px-4 py-2 fw-bold fs-4 shadow-sm">Qty: ${p.found_qty} / ${p.required_qty}</div></div>`;
 
-            // 2. Use a short timeout to render the new one.
-            // This 100ms gap allows the browser to paint the "Empty" screen
-            // so the user sees a distinct "Close -> Open" animation.
-            uiTimers[targetCam] = setTimeout(() => {
+            // 2. Reset Animation
+            // We remove the class, force the browser to calculate layout, then add it back.
+            // This restarts the CSS animation instantly.
+            overlay.classList.remove('animate-pop');
+            overlay.style.display = 'flex'; // Ensure it's visible
 
-                // Update Content
-                overlay.innerHTML = `<div class="popup-img-container"><img src="${imgUrl}" alt="Detected"></div><div class="d-flex align-items-center justify-content-between w-100 p-2"><div class="d-flex align-items-center gap-3"><i class="fas fa-check-circle fa-3x popup-icon"></i><div><h6 class="opacity-75 fw-bold text-uppercase m-0 small ls-1">Detected</h6><h2 class="fw-bold m-0" style="font-size: 2.2rem;">${p.part_name}</h2></div></div><div class="popup-badge rounded-pill px-4 py-2 fw-bold fs-4 shadow-sm">Qty: ${p.found_qty} / ${p.required_qty}</div></div>`;
+            // This magic line forces the browser to recognize the change
+            void overlay.offsetWidth;
 
-                // Re-apply Class and Show
-                overlay.className = `side-popup theme-green`;
-                overlay.style.display = 'flex';
-
-                // 3. Set the Reload Timer (Starts AFTER the pop-up appears)
-                timers[targetCam] = setTimeout(() => window.location.reload(), 2000);
-
-            }, 100); // 100ms delay for visual separation
+            // 3. Apply classes
+            overlay.className = `side-popup theme-green animate-pop`;
+            overlay.style.display = 'flex';
 
             // ============================================================
-            // [END] CHANGE
+            // [END] FIX
             // ============================================================
+
+            // 4. Start Reload Timer (2 seconds from NOW)
+            timers[targetCam] = setTimeout(() => window.location.reload(), 2000);
         }
         else if (data.type === 'kit_completed' || data.type === 'kit_completed_with_warning') {
-            // Logic for kit completion (same as before, but ensures timers are clean)
             const isWarning = (data.type === 'kit_completed_with_warning');
             const themeClass = isWarning ? 'theme-yellow' : 'theme-dark-green';
             const iconClass = isWarning ? 'fa-exclamation-triangle' : 'fa-box-open';
             const titleText = isWarning ? 'OVERCOUNT DETECTED' : 'KIT COMPLETED';
 
-            // Hide first to ensure fresh render if needed
-            overlay.style.display = 'none';
+            // Same animation logic for completion
+            overlay.classList.remove('animate-pop');
+            void overlay.offsetWidth;
 
-            setTimeout(() => {
-                overlay.className = `side-popup ${themeClass}`;
-                overlay.style.display = 'flex';
+            let contentHtml = `<div class="d-flex flex-column align-items-center justify-content-center h-100">
+                <i class="fas ${iconClass} fa-6x mb-4 popup-icon"></i>
+                <h1 class="fw-bold display-4 text-center">${titleText}</h1>
+                <h3 class="opacity-75 text-uppercase">Kit #${data.completed_count}</h3>`;
 
-                let contentHtml = `<div class="d-flex flex-column align-items-center justify-content-center h-100">
-                    <i class="fas ${iconClass} fa-6x mb-4 popup-icon"></i>
-                    <h1 class="fw-bold display-4 text-center">${titleText}</h1>
-                    <h3 class="opacity-75 text-uppercase">Kit #${data.completed_count}</h3>`;
+            if (data.imageUrl) {
+                contentHtml += `
+                <div class="mt-4 rounded overflow-hidden border shadow-sm bg-white" style="max-height: 250px; width: 80%; display: flex; align-items: center; justify-content: center;">
+                    <img src="${data.imageUrl}" style="max-width: 100%; max-height: 250px; object-fit: contain;">
+                </div>`;
+            }
 
-                if (data.imageUrl) {
-                    contentHtml += `
-                    <div class="mt-4 rounded overflow-hidden border shadow-sm bg-white" style="max-height: 250px; width: 80%; display: flex; align-items: center; justify-content: center;">
-                        <img src="${data.imageUrl}" style="max-width: 100%; max-height: 250px; object-fit: contain;">
-                    </div>`;
-                }
+            if (isWarning && data.overcount_list) {
+                contentHtml += `<div class="mt-4 bg-white text-dark p-3 rounded shadow-sm text-start" style="min-width: 300px;"><h6 class="border-bottom pb-2 mb-2 fw-bold text-warning">Extra Parts:</h6><ul class="mb-0 ps-3">`;
+                data.overcount_list.forEach(item => { contentHtml += `<li>${item}</li>`; });
+                contentHtml += `</ul></div>`;
+            }
+            contentHtml += `</div>`;
 
-                if (isWarning && data.overcount_list) {
-                    contentHtml += `<div class="mt-4 bg-white text-dark p-3 rounded shadow-sm text-start" style="min-width: 300px;"><h6 class="border-bottom pb-2 mb-2 fw-bold text-warning">Extra Parts:</h6><ul class="mb-0 ps-3">`;
-                    data.overcount_list.forEach(item => { contentHtml += `<li>${item}</li>`; });
-                    contentHtml += `</ul></div>`;
-                }
-                contentHtml += `</div>`;
-                overlay.innerHTML = contentHtml;
+            overlay.innerHTML = contentHtml;
+            overlay.className = `side-popup ${themeClass} animate-pop`;
+            overlay.style.display = 'flex';
 
-                timers[targetCam] = setTimeout(() => window.location.reload(), 4000);
-            }, 100);
+            timers[targetCam] = setTimeout(() => window.location.reload(), 4000);
         }
     });
 
-    // ... (Rest of your script: showRedScreen, submitResolution, etc. remains unchanged) ...
-    // --- UPDATED: RED SCREEN LOGIC TO SHOW VALIDATION IMAGES ---
+    // ... (Keep the rest of your functions: showRedScreen, etc. exactly the same) ...
+    // [Paste the rest of the existing script logic here]
+
     function showRedScreen(type, data) {
         currentErrorType = type; currentErrorData = data;
         const overlay = document.getElementById('kit-error-overlay');
         document.getElementById('err-title').innerText = type === 'detection' ? "WRONG PART DETECTED" : "VALIDATION FAILED";
-
         let contentHtml = '';
         let imgHtml = '';
         if (data.imageUrl) {
             imgHtml = `<div class="text-center mt-3"><img src="${data.imageUrl}" class="img-fluid rounded border shadow-sm" style="max-height: 200px; object-fit: contain; background: #fff;"></div>`;
         }
-
         if (type === 'detection') {
             contentHtml = `<div class="text-center"><h4 class="fw-bold text-dark">${data.detectedPart}</h4></div>`;
         } else {
@@ -845,9 +845,7 @@
             if (data.overcount) contentHtml += `<li class="list-group-item list-group-item-warning">Overcount: ${data.overcount.join(', ')}</li>`;
             contentHtml += '</ul>';
         }
-
         contentHtml += imgHtml;
-
         document.getElementById('err-content').innerHTML = contentHtml;
         const select = document.getElementById('err-reason');
         select.innerHTML = '<option value="" disabled selected>-- Choose Action --</option>';
@@ -865,7 +863,6 @@
         } catch (e) { console.error(e); alert("Error submitting resolution."); }
     }
 
-    // ... (Keep the rest of your history/grid functions exactly as they were) ...
     function openHistoryGrid(camId) {
         currentHistoryCam = camId;
         document.getElementById('grid-view').classList.remove('d-none');
@@ -902,107 +899,58 @@
     async function loadKitDetails(kitNum) {
         document.getElementById('grid-view').classList.add('d-none');
         document.getElementById('detail-view').classList.remove('d-none');
-
         try {
             const res = await fetch(`/kitting/api/history/${ACT_ID}/${currentHistoryCam}/${kitNum}`);
             const data = await res.json();
-
             const compRow = document.getElementById('detail-components-row');
             const errRow = document.getElementById('detail-errors-row');
             const errSection = document.getElementById('detail-errors-section');
             const valSection = document.getElementById('detail-validation-section');
             const valImgDiv = document.getElementById('detail-validation-img');
-
             compRow.innerHTML = ''; errRow.innerHTML = '';
-
             if (data.status === 'success') {
                 if (data.validation_image_url || (data.errors && data.errors.some(e => e.error_type === 'validation'))) {
                     let vUrl = data.validation_image_url;
                     if (vUrl) {
                         valSection.classList.remove('d-none');
                         valImgDiv.innerHTML = `<img src="${vUrl}" class="rounded border shadow-sm" style="height: 100px; cursor: zoom-in;" onclick="openZoom('${vUrl}')">`;
-                    } else {
-                        valSection.classList.add('d-none');
-                    }
-                } else {
-                    valSection.classList.add('d-none');
-                }
-
+                    } else { valSection.classList.add('d-none'); }
+                } else { valSection.classList.add('d-none'); }
                 data.components.forEach(part => {
                     let statusClass = 'border-success';
                     if (part.found_quantity == 0) statusClass = 'border-danger';
                     else if (part.found_quantity != part.quantity) statusClass = 'border-warning';
-
-                    let html = `
-                    <div class="col-md-6">
-                        <div class="history-card ${statusClass}">
-                            <div class="history-card-header">
-                                <div><div class="small fw-bold text-muted">PART:</div><strong>${part.name}</strong></div>
-                                <span class="badge ${part.found_quantity >= part.quantity ? 'bg-success' : 'bg-warning text-dark'}">${part.found_quantity}/${part.quantity}</span>
-                            </div>
-                            <div class="history-img-grid">
-                    `;
+                    let html = `<div class="col-md-6"><div class="history-card ${statusClass}"><div class="history-card-header"><div><div class="small fw-bold text-muted">PART:</div><strong>${part.name}</strong></div><span class="badge ${part.found_quantity >= part.quantity ? 'bg-success' : 'bg-warning text-dark'}">${part.found_quantity}/${part.quantity}</span></div><div class="history-img-grid">`;
                     const images = (part.captured_images && part.captured_images.length > 0) ? part.captured_images : (part.last_image_url ? [part.last_image_url] : []);
                     if (images.length > 0) {
                         images.forEach((imgItem, idx) => {
-                            let src = "";
-                            let badgeInfo = "";
+                            let src = ""; let badgeInfo = "";
                             if (typeof imgItem === 'string') { src = imgItem; }
-                            else if (imgItem && imgItem.image_url) {
-                                src = imgItem.image_url;
-                                if (imgItem.confidence) { const pct = Math.round(imgItem.confidence * 100); badgeInfo = ` (${pct}%)`; }
-                            }
-                            if (src) {
-                                html += `<div class="history-img-item" onclick="openZoom('${src}')"><div class="img-badge">Img ${idx + 1}${badgeInfo}</div><img src="${src}"></div>`;
-                            }
+                            else if (imgItem && imgItem.image_url) { src = imgItem.image_url; if (imgItem.confidence) { const pct = Math.round(imgItem.confidence * 100); badgeInfo = ` (${pct}%)`; } }
+                            if (src) { html += `<div class="history-img-item" onclick="openZoom('${src}')"><div class="img-badge">Img ${idx + 1}${badgeInfo}</div><img src="${src}"></div>`; }
                         });
-                    } else {
-                        html += `<div class="p-3 text-muted small text-center w-100">No images captured</div>`;
-                    }
+                    } else { html += `<div class="p-3 text-muted small text-center w-100">No images captured</div>`; }
                     html += `</div></div></div>`;
                     compRow.innerHTML += html;
                 });
-
                 if (data.errors && data.errors.length > 0) {
-                    errSection.classList.remove('d-none');
-                    errRow.innerHTML = '';
+                    errSection.classList.remove('d-none'); errRow.innerHTML = '';
                     data.errors.forEach(err => {
                         const details = err.error_details || {};
                         const reason = err.reason_selected || err.reason || 'Pending Resolution';
-                        let badgeText = "WRONG PART";
-                        let titleText = "Unknown Object";
-                        let badgeClass = "bg-danger";
-
+                        let badgeText = "WRONG PART"; let titleText = "Unknown Object"; let badgeClass = "bg-danger";
                         if (err.error_type === 'validation') {
-                            badgeText = "MISSING PARTS";
-                            badgeClass = "bg-warning text-dark";
+                            badgeText = "MISSING PARTS"; badgeClass = "bg-warning text-dark";
                             let missingItems = [];
                             if (details.missing && details.missing.length > 0) missingItems.push(...details.missing);
                             if (details.undercount && details.undercount.length > 0) missingItems.push(...details.undercount);
                             titleText = missingItems.length > 0 ? missingItems.join(", ") : "Validation Failed";
-                        } else {
-                            titleText = details.detectedPart || details.detected_part || details.AiDetectedPartName || 'Unknown Object';
-                        }
+                        } else { titleText = details.detectedPart || details.detected_part || details.AiDetectedPartName || 'Unknown Object'; }
                         let imgHtml = '';
-                        if (details.imageUrl) {
-                            imgHtml = `<img src="${details.imageUrl}" class="rounded mt-2 border" style="height:100px; width:100%; object-fit:contain; background:#fff; cursor:zoom-in" onclick="openZoom('${details.imageUrl}')">`;
-                        }
-                        errRow.innerHTML += `
-                            <div class="col-md-4">
-                                <div class="p-3 rounded border border-danger bg-danger-subtle h-100">
-                                    <div class="d-flex justify-content-between align-items-start mb-2">
-                                        <span class="badge ${badgeClass}">${badgeText}</span>
-                                        <small class="text-danger fw-bold">${new Date(err.timestamp).toLocaleTimeString()}</small>
-                                    </div>
-                                    <h6 class="fw-bold text-danger mb-1" style="word-break: break-word;">${titleText}</h6>
-                                    <div class="small text-muted mb-2"><strong>Resolution:</strong> ${reason}</div>
-                                    ${imgHtml}
-                                </div>
-                            </div>`;
+                        if (details.imageUrl) { imgHtml = `<img src="${details.imageUrl}" class="rounded mt-2 border" style="height:100px; width:100%; object-fit:contain; background:#fff; cursor:zoom-in" onclick="openZoom('${details.imageUrl}')">`; }
+                        errRow.innerHTML += `<div class="col-md-4"><div class="p-3 rounded border border-danger bg-danger-subtle h-100"><div class="d-flex justify-content-between align-items-start mb-2"><span class="badge ${badgeClass}">${badgeText}</span><small class="text-danger fw-bold">${new Date(err.timestamp).toLocaleTimeString()}</small></div><h6 class="fw-bold text-danger mb-1" style="word-break: break-word;">${titleText}</h6><div class="small text-muted mb-2"><strong>Resolution:</strong> ${reason}</div>${imgHtml}</div></div>`;
                     });
-                } else {
-                    errSection.classList.add('d-none');
-                }
+                } else { errSection.classList.add('d-none'); }
             }
         } catch (e) { console.error("Error loading kit details:", e); alert("Failed to load history details."); }
     }
@@ -1015,7 +963,6 @@
     let activeError = null;
     if (Array.isArray(errorsC1) && errorsC1.length > 0) { activeError = errorsC1[errorsC1.length - 1]; }
     else if (Array.isArray(errorsC2) && errorsC2.length > 0) { activeError = errorsC2[errorsC2.length - 1]; }
-
     if (activeError) {
         console.warn("⚠️ Active Error Found on Load:", activeError);
         resetOverlays();
