@@ -563,39 +563,53 @@ def update_detection(table_id):
             }), 409
 
         # ---------------------------------------------------------------------
-        # [BLOCK 6] CORRECT PART DETECTED (SUCCESS FLOW)
+        # [BLOCK 6] CORRECT PART DETECTED (SUCCESS FLOW) - ATOMIC FIX
         # ---------------------------------------------------------------------
-        new_found = target_part.get('found_quantity', 0) + 1
-        required_qty = target_part.get('quantity', 1)
         
-        # Prepare DB Update
+        # 1. Define the keys
         update_field = f"components.{target_index}"
         last_detected_key = f"last_detected_index_{cam_id}"
         
-        db_updates = {
-            f"{update_field}.found_quantity": new_found,
-            f"{update_field}.last_image_url": image_url, # Quick access for UI thumbnail
-            "last_updated": datetime.utcnow(),
-            last_detected_key: target_index 
-        }
-        
-        # Check if this specific component slot is now full
-        if new_found >= required_qty:
-            db_updates[f"{update_field}.status"] = "completed"
-            
-            # Assign sequence order (e.g., this is the 3rd unique part finished)
-            if not target_part.get('sequence_order'):
-                c_done = sum(1 for p in current_components if get_safe_cam_id(p.get('camera')) == cam_id and p.get('status') == 'completed')
-                db_updates[f"{update_field}.sequence_order"] = c_done + 1
-
-        # DB Action: Update counts AND Push the Rich Object to history list
-        db.activities.update_one(
-            {"_id": ObjectId(activity_id)}, 
+        # 2. ATOMIC UPDATE: Increment Count AND Push Image in one go.
+        # We use find_one_and_update to lock, update, and return the NEW document.
+        updated_activity = db.activities.find_one_and_update(
+            {"_id": activity['_id']},
             {
-                "$set": db_updates,
-                "$push": {f"{update_field}.captured_images": detection_record} 
-            }
+                "$inc": {f"{update_field}.found_quantity": 1}, # Atomic Math
+                "$push": {f"{update_field}.captured_images": detection_record},
+                "$set": {
+                    f"{update_field}.last_image_url": image_url,
+                    "last_updated": datetime.utcnow(),
+                    last_detected_key: target_index
+                }
+            },
+            return_document=True # Important: Returns the document AFTER the update
         )
+
+        # 3. Get the NEW values from the updated document
+        updated_component = updated_activity['components'][target_index]
+        new_found = updated_component.get('found_quantity', 0)
+        required_qty = updated_component.get('quantity', 1)
+
+        # 4. Check Completion (Post-Update)
+        # Check if this specific component slot is now full
+        if new_found >= required_qty and updated_component.get('status') != 'completed':
+            
+            # Determine sequence order
+            # We count how many *other* parts are completed in the updated doc
+            c_done = sum(1 for p in updated_activity['components'] 
+                         if get_safe_cam_id(p.get('camera')) == cam_id 
+                         and p.get('status') == 'completed')
+            
+            # Perform a second update to mark this specific part as completed
+            # (This is safe to do separately because the quantity is already secure)
+            db.activities.update_one(
+                {"_id": activity['_id']},
+                {"$set": {
+                    f"{update_field}.status": "completed",
+                    f"{update_field}.sequence_order": c_done + 1
+                }}
+            )
 
         # Socket Action: Show Green "Detected" Popup on UI
         socketio.emit('ui_update', {
@@ -610,13 +624,13 @@ def update_detection(table_id):
         }, to=f"table_{table_id}")
 
         return jsonify({
-        "message": "correct-part-detected",
-        "found": new_found,
-        "part_name": detected_part,
-        "cam_id": cam_id,
-        "tracking_id": tracking_id,
-        "avg_threshold": confidence
-            }), 200
+            "message": "correct-part-detected",
+            "found": new_found,
+            "part_name": detected_part,
+            "cam_id": cam_id,
+            "tracking_id": tracking_id,
+            "avg_threshold": confidence
+        }), 200
 
     # ---------------------------------------------------------------------
     # [BLOCK 7] EXCEPTION HANDLING
