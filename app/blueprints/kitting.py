@@ -462,16 +462,14 @@ def update_detection(table_id):
         # [BLOCK 3] FILE HANDLING
         # ---------------------------------------------------------------------
         # Generate a unique filename: {ActivityID}_{CamID}_{KitNum}_{Part}_{Timestamp}.jpg
-        activity_id = str(activity['_id'])
-        timestamp = int(datetime.utcnow().timestamp())
-        filename = secure_filename(f"{activity_id}_{cam_id}_kit{current_kit_num}_{detected_part}_{timestamp}.jpg")
+        original_filename = secure_filename(file.filename)
         
-        # Save to disk
-        file_path = os.path.join(Config.UPLOAD_FOLDER, filename)
+        # 2. Use it directly (Saving exactly what was sent)
+        file_path = os.path.join(Config.UPLOAD_FOLDER, original_filename)
         file.save(file_path)
         
-        # Generate Web URL for the frontend to access this image
-        image_url = url_for('kitting.get_image', filename=filename) 
+        # 3. Generate URL
+        image_url = url_for('kitting.get_image', filename=original_filename)
 
         # Create a Rich Detection Record Object
         # This object contains all metadata to be stored in the DB (for history/debugging)
