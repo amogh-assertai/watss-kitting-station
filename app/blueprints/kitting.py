@@ -739,6 +739,30 @@ def validate_cycle(table_id):
         # [BLOCK 4] FAILURE FLOW (RICH RESPONSE)
         # ---------------------------------------------------------------------
         if missing or undercount:
+            
+            # --- START ADDED CODE: Save to DB ---
+            error_data = {
+                "error_type": "validation",
+                "reason_selected": None,
+                "timestamp": datetime.utcnow(),
+                "error_details": {
+                    "message": "validation_failed",
+                    "imageUrl": image_url,
+                    "camId": cam_id,
+                    "missing": missing,
+                    "undercount": undercount,
+                    "overcount": overcount,
+                    "error_code": "validation_error"
+                }
+            }
+
+            error_key = f"current_kit_errors_{cam_id}"
+            db.activities.update_one(
+                {"_id": activity['_id']}, 
+                {"$push": {error_key: error_data}}
+            )
+            # --- END ADDED CODE ---
+
             # Emit Socket Event (Visuals)
             socketio.emit('ui_update', {
                 "type": "validation_error",
