@@ -150,7 +150,6 @@
     /* --- SIDE PANEL POPUPS (CAM 1 & CAM 2) --- */
     .side-popup {
         display: none;
-        /* Hidden by default */
         position: fixed;
         top: 50%;
         transform: translateY(-50%);
@@ -578,12 +577,12 @@
                 <div class="section-header completed">
                     {% set completed_count = activity.components | selectattr('camera', 'equalto', cam_name) |
                     selectattr('status', 'equalto', 'completed') | list | length %}
-                    <span>Completed ({{ completed_count }})</span>
+                    <span id="header-count-completed-{{ cam_name }}">Completed ({{ completed_count }})</span>
                 </div>
-                <div class="row g-3 mb-4">
+                <div class="row g-3 mb-4" id="completed-row-{{ cam_name }}">
                     {% for part in activity.components %}
                     {% if part.camera == cam_name and part.status == 'completed' %}
-                    <div class="col-md-6">
+                    <div class="col-md-6 part-item-col" data-part="{{ part.name }}">
                         <div class="part-card completed">
                             <div class="order-badge">#{{ part.sequence_order }}</div>
                             {% if cam_name == 'cam1' and activity.last_detected_index_cam1 == loop.index0 %}
@@ -602,12 +601,12 @@
                 <div class="section-header pending">
                     {% set pending_count = activity.components | selectattr('camera', 'equalto', cam_name) |
                     selectattr('status', '!=', 'completed') | list | length %}
-                    <span>Pending ({{ pending_count }})</span>
+                    <span id="header-count-pending-{{ cam_name }}">Pending ({{ pending_count }})</span>
                 </div>
-                <div class="row g-3">
+                <div class="row g-3" id="pending-row-{{ cam_name }}">
                     {% for part in activity.components %}
                     {% if part.camera == cam_name and part.status != 'completed' %}
-                    <div class="col-md-6">
+                    <div class="col-md-6 part-item-col" data-part="{{ part.name }}">
                         <div class="part-card pending">
                             {% if cam_name == 'cam1' and activity.last_detected_index_cam1 == loop.index0 %}
                             <div class="last-detected-badge">Last Detected</div>
@@ -709,6 +708,9 @@
     let currentErrorData = null;
     let currentHistoryCam = null;
     let timers = { cam1: null, cam2: null };
+    
+    // --- ADDED: SYSTEM LOCK FLAG ---
+    let isSystemLocked = false; 
 
     function resetOverlays() {
         if (timers.cam1) { clearTimeout(timers.cam1); timers.cam1 = null; }
@@ -716,6 +718,67 @@
 
         const ids = ['overlay-cam1', 'overlay-cam2', 'kit-error-overlay', 'job-completion-overlay', 'zoom-overlay'];
         ids.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+        
+        isSystemLocked = false; // Reset lock when clearing
+    }
+
+    // --- ADDED: Helper to update UI without reload ---
+    function updateCardWithoutReload(partName, found, required, camId) {
+        const pendingRow = document.getElementById(`pending-row-${camId}`);
+        const completedRow = document.getElementById(`completed-row-${camId}`);
+        
+        if (!pendingRow || !completedRow) return;
+
+        let targetCol = null;
+        // Search in pending first
+        for (let col of pendingRow.children) { if (col.dataset.part === partName) { targetCol = col; break; } }
+        // If not found, check completed
+        if (!targetCol) {
+            for (let col of completedRow.children) { if (col.dataset.part === partName) { targetCol = col; break; } }
+        }
+
+        if (targetCol) {
+            const card = targetCol.querySelector('.part-card');
+            
+            // 1. Update text
+            const qtyDiv = card.querySelector('.part-qty');
+            if (qtyDiv) {
+                qtyDiv.innerHTML = `<span class="text-primary fw-bold">Qty: ${found} / ${required}</span>`;
+            }
+
+            // 2. Move badge
+            document.querySelectorAll('.last-detected-badge').forEach(el => el.remove());
+            const badge = document.createElement('div');
+            badge.className = 'last-detected-badge';
+            badge.innerText = 'Last Detected';
+            card.appendChild(badge);
+
+            // 3. Move if complete
+            if (found >= required) {
+                card.classList.remove('pending');
+                card.classList.add('completed');
+                const icon = card.querySelector('.fa-exclamation-circle');
+                if (icon) icon.remove();
+
+                if (targetCol.parentElement.id === `pending-row-${camId}`) {
+                    targetCol.style.opacity = '0';
+                    setTimeout(() => {
+                        completedRow.appendChild(targetCol);
+                        targetCol.style.opacity = '1';
+                        updateHeaderCounts(camId);
+                    }, 200);
+                }
+            }
+        }
+    }
+
+    function updateHeaderCounts(camId) {
+        const pRow = document.getElementById(`pending-row-${camId}`);
+        const cRow = document.getElementById(`completed-row-${camId}`);
+        const pHeader = document.getElementById(`header-count-pending-${camId}`);
+        const cHeader = document.getElementById(`header-count-completed-${camId}`);
+        if (pRow && pHeader) pHeader.innerText = `Pending (${pRow.children.length})`;
+        if (cRow && cHeader) cHeader.innerText = `Completed (${cRow.children.length})`;
     }
 
     function openZoom(src) { document.getElementById('zoom-img').src = src; document.getElementById('zoom-overlay').style.display = 'flex'; }
@@ -744,43 +807,30 @@
         const overlayId = `overlay-${targetCam}`;
         const overlay = document.getElementById(overlayId);
 
-        // ALWAYS clear the timer immediately on new data
         if (timers[targetCam]) { clearTimeout(timers[targetCam]); timers[targetCam] = null; }
 
         if (data.type === 'refresh_needed') {
-            const redDet = document.getElementById('detection-error-overlay');
-            const redVal = document.getElementById('validation-error-overlay');
-            if ((redDet && redDet.style.display !== 'none') || (redVal && redVal.style.display !== 'none')) {
-                return;
-            }
+            // --- FIX 1: USE LOCK CHECK INSTEAD OF INVALID IDS ---
+            if (isSystemLocked) return;
 
             const p = data.popup_data;
             const imgUrl = p.imageUrl + "?t=" + new Date().getTime();
 
-            // ============================================================
-            // [START] CHANGE: 1 Second Timer & Hard Blink
-            // ============================================================
+            // --- FIX 2: UPDATE UI INSTANTLY (NO RELOAD) ---
+            updateCardWithoutReload(p.part_name, p.found_qty, p.required_qty, targetCam);
 
-            // 1. Hard Hide first (Ensures browser sees a "remove")
-            overlay.style.display = 'none';
+            // Show Popup
+            overlay.style.display = 'none'; // Hard reset
             overlay.classList.remove('animate-pop');
-
-            // 2. Update Content
             overlay.innerHTML = `<div class="popup-img-container"><img src="${imgUrl}" alt="Detected"></div><div class="d-flex align-items-center justify-content-between w-100 p-2"><div class="d-flex align-items-center gap-3"><i class="fas fa-check-circle fa-3x popup-icon"></i><div><h6 class="opacity-75 fw-bold text-uppercase m-0 small ls-1">Detected</h6><h2 class="fw-bold m-0" style="font-size: 2.2rem;">${p.part_name}</h2></div></div><div class="popup-badge rounded-pill px-4 py-2 fw-bold fs-4 shadow-sm">Qty: ${p.found_qty} / ${p.required_qty}</div></div>`;
-
-            // 3. Force Reflow (Crucial for the "pop" effect on rapid scans)
-            void overlay.offsetWidth;
-
-            // 4. Show & Animate
+            void overlay.offsetWidth; // Reflow
             overlay.className = `side-popup theme-green animate-pop`;
             overlay.style.display = 'flex';
 
-            // 5. Timer set to 1000ms (1 Second) as requested
-            timers[targetCam] = setTimeout(() => window.location.reload(), 1000);
-
-            // ============================================================
-            // [END] CHANGE
-            // ============================================================
+            // --- FIX 3: HIDE INSTEAD OF RELOAD ---
+            timers[targetCam] = setTimeout(() => {
+                overlay.style.display = 'none';
+            }, 1000);
         }
         else if (data.type === 'kit_completed' || data.type === 'kit_completed_with_warning') {
             const isWarning = (data.type === 'kit_completed_with_warning');
@@ -788,7 +838,6 @@
             const iconClass = isWarning ? 'fa-exclamation-triangle' : 'fa-box-open';
             const titleText = isWarning ? 'OVERCOUNT DETECTED' : 'KIT COMPLETED';
 
-            // Same hard reset for kit completion
             overlay.style.display = 'none';
             overlay.classList.remove('animate-pop');
             void overlay.offsetWidth;
@@ -799,10 +848,7 @@
                 <h3 class="opacity-75 text-uppercase">Kit #${data.completed_count}</h3>`;
 
             if (data.imageUrl) {
-                contentHtml += `
-                <div class="mt-4 rounded overflow-hidden border shadow-sm bg-white" style="max-height: 250px; width: 80%; display: flex; align-items: center; justify-content: center;">
-                    <img src="${data.imageUrl}" style="max-width: 100%; max-height: 250px; object-fit: contain;">
-                </div>`;
+                contentHtml += `<div class="mt-4 rounded overflow-hidden border shadow-sm bg-white" style="max-height: 250px; width: 80%; display: flex; align-items: center; justify-content: center;"><img src="${data.imageUrl}" style="max-width: 100%; max-height: 250px; object-fit: contain;"></div>`;
             }
 
             if (isWarning && data.overcount_list) {
@@ -816,12 +862,14 @@
             overlay.className = `side-popup ${themeClass} animate-pop`;
             overlay.style.display = 'flex';
 
-            timers[targetCam] = setTimeout(() => window.location.reload(), 4000);
+            // --- FIX 4: REDUCED TIMER TO 1.5s ---
+            timers[targetCam] = setTimeout(() => window.location.reload(), 1500);
         }
     });
 
     // ... (Keep existing showRedScreen, submitResolution, etc.) ...
     function showRedScreen(type, data) {
+        isSystemLocked = true; // --- LOCK ENABLED ---
         currentErrorType = type; currentErrorData = data;
         const overlay = document.getElementById('kit-error-overlay');
         document.getElementById('err-title').innerText = type === 'detection' ? "WRONG PART DETECTED" : "VALIDATION FAILED";
