@@ -473,6 +473,8 @@
 <div id="overlay-cam1" class="side-popup theme-green"></div>
 <div id="overlay-cam2" class="side-popup theme-green"></div>
 
+<audio id="error-audio" src="{{ url_for('static', filename='alarm.mp3') }}" preload="auto" loop></audio>
+
 <div id="kit-error-overlay">
     <div class="error-card">
         <div class="text-center mb-2"><i class="fas fa-exclamation-circle fa-4x text-danger"></i></div>
@@ -708,11 +710,28 @@
     let currentErrorData = null;
     let currentHistoryCam = null;
     let timers = { cam1: null, cam2: null };
+
+    function playAlarm() {
+        const audio = document.getElementById('error-audio');
+        if (audio) {
+            // We use a promise catch because browsers block autoplay if user hasn't interacted yet
+            audio.play().catch(e => console.warn("Audio blocked (User must interact first):", e));
+        }
+    }
+    
+    function stopAlarm() {
+        const audio = document.getElementById('error-audio');
+        if (audio) {
+            audio.pause();
+            audio.currentTime = 0; // Rewind to start
+        }
+    }
     
     // --- ADDED: SYSTEM LOCK FLAG ---
     let isSystemLocked = false; 
 
     function resetOverlays() {
+        stopAlarm(); // <--- STOP SOUND
         if (timers.cam1) { clearTimeout(timers.cam1); timers.cam1 = null; }
         if (timers.cam2) { clearTimeout(timers.cam2); timers.cam2 = null; }
 
@@ -872,6 +891,7 @@
         isSystemLocked = true; // --- LOCK ENABLED ---
         currentErrorType = type; currentErrorData = data;
         const overlay = document.getElementById('kit-error-overlay');
+        playAlarm(); // <--- START SOUND
         document.getElementById('err-title').innerText = type === 'detection' ? "WRONG PART DETECTED" : "VALIDATION FAILED";
         let contentHtml = '';
         let imgHtml = '';
