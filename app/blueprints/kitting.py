@@ -111,7 +111,7 @@ def start_activity():
     try:
         data = request.json
         db = get_db()
-        kit_def = db.kits.find_one({"kit_name": data.get('kit_name', '')})
+        kit_def = db.kits.find_one({"kit_name": data.get('kit_name', '').strip().upper()})
         if not kit_def:
             regex = re.compile(f"^{re.escape(data.get('kit_name', ''))}$", re.IGNORECASE)
             kit_def = db.kits.find_one({"kit_name": regex})
