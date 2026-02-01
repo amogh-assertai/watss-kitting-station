@@ -513,21 +513,52 @@
         </div>
         <div class="col-md-5 px-5">
             <div class="d-flex justify-content-between small fw-bold text-muted mb-1">
-                <span>OVERALL PROGRESS (Kits Packed)</span>
-                {% set target_per_cam = activity.total_kits_to_pack %}
-                {% set total_ops = target_per_cam * 2 %}
-                {% set c1_done = [(activity.current_kit_index_cam1 - 1), target_per_cam] | min %}
-                {% if c1_done < 0 %}{% set c1_done=0 %}{% endif %} {% set c2_done=[(activity.current_kit_index_cam2 -
-                    1), target_per_cam] | min %} {% if c2_done < 0 %}{% set c2_done=0 %}{% endif %} {% set
-                    total_done=c1_done + c2_done %} {% if total_ops> 0 %}{% set percent = (total_done / total_ops * 100)
-                    | round | int %}{% else %}{% set percent = 0 %}{% endif %}
-                    <span class="text-dark">{{ percent }}%</span>
+                <span>OVERALL PROGRESS</span>
+                
+                {# --- SMART PROGRESS LOGIC --- #}
+                {% set target = activity.total_kits_to_pack %}
+                
+                {# 1. Check which cameras actually have parts #}
+                {% set has_c1 = activity.components | selectattr('camera', 'equalto', 'cam1') | list | length > 0 %}
+                {% set has_c2 = activity.components | selectattr('camera', 'equalto', 'cam2') | list | length > 0 %}
+                
+                {# 2. Calculate Total Operations based on active cameras #}
+                {% set active_cams = (1 if has_c1 else 0) + (1 if has_c2 else 0) %}
+                {% set total_ops = target * active_cams %}
+                
+                {# 3. Calculate Completed Kits #}
+                {% set c1_done = 0 %}
+                {% if has_c1 %}
+                    {% set c1_done = [(activity.current_kit_index_cam1 - 1), target] | min %}
+                    {% if c1_done < 0 %}{% set c1_done = 0 %}{% endif %}
+                {% endif %}
+                
+                {% set c2_done = 0 %}
+                {% if has_c2 %}
+                    {% set c2_done = [(activity.current_kit_index_cam2 - 1), target] | min %}
+                    {% if c2_done < 0 %}{% set c2_done = 0 %}{% endif %}
+                {% endif %}
+                
+                {# 4. Final Percent #}
+                {% set total_done = c1_done + c2_done %}
+                
+                {% if total_ops > 0 %}
+                    {% set percent = (total_done / total_ops * 100) | round | int %}
+                {% else %}
+                    {% set percent = 100 %} {# If no parts at all, it's done #}
+                {% endif %}
+                
+                <span class="text-dark">{{ percent }}%</span>
             </div>
             <div class="progress" style="height: 8px; border-radius: 4px;">
                 <div class="progress-bar bg-success" style="width: {{ percent }}%"></div>
             </div>
         </div>
         <div class="col-md-4 d-flex justify-content-end gap-5">
+            <div>
+                <div class="stat-label">Total Time</div>
+                <div class="stat-value text-primary" id="timer-activity">00:00:00</div>
+            </div>
             <div>
                 <div class="stat-label">PO Number</div>
                 <div class="stat-value">{{ activity.order_number }}</div>
@@ -553,6 +584,11 @@
                 <div class="d-flex align-items-center gap-3">
                     <i class="fas fa-video fa-lg text-secondary"></i>
                     <h5 class="mb-0 fw-bold text-dark text-uppercase">{{ cam_name }}</h5>
+                    {% if not is_cam_done %}
+                    <span class="badge bg-light text-dark border ms-2" id="timer-kit-{{ cam_name }}">
+                        <i class="far fa-clock me-1"></i> 00:00
+                    </span>
+                    {% endif %}
                     <button class="btn btn-outline-primary btn-cam-history ms-2"
                         onclick="openHistoryGrid('{{ cam_name }}')">
                         <i class="fas fa-history me-1"></i> History
@@ -705,6 +741,73 @@
     const TABLE_ID = "{{ activity.table_id }}";
     const ACT_ID = "{{ activity._id }}";
     const socket = io(SOCKET_URL, { transports: ['websocket'], upgrade: false });
+
+    // --- TIMERS: READ START & END TIMES ---
+    const TIME_ACT_STR = "{{ activity.start_time }}";
+    const TIME_END_STR = "{{ activity.end_time }}"; // <--- NEW
+    const TIME_C1_STR = "{{ activity.kit_start_time_cam1 }}";
+    const TIME_C2_STR = "{{ activity.kit_start_time_cam2 }}";
+
+    // Convert to Date Objects
+    const START_TIME_ACT = TIME_ACT_STR && TIME_ACT_STR !== 'None' ? new Date(TIME_ACT_STR) : new Date();
+    const END_TIME_ACT   = TIME_END_STR && TIME_END_STR !== 'None' ? new Date(TIME_END_STR) : null; // <--- NEW
+    
+    const START_TIME_C1 = TIME_C1_STR ? new Date(TIME_C1_STR) : new Date();
+    const START_TIME_C2 = TIME_C2_STR ? new Date(TIME_C2_STR) : new Date();
+
+    function updateTimers() {
+        // If job is finished, use the End Time. Otherwise use "Now".
+        const now = END_TIME_ACT ? END_TIME_ACT : new Date(); 
+        
+        // 1. Total Activity
+        const diffAct = Math.floor((now - START_TIME_ACT) / 1000);
+        const elAct = document.getElementById('timer-activity');
+        if(elAct) {
+            elAct.innerText = formatSeconds(diffAct);
+            // Visual cue that timer stopped
+            if(END_TIME_ACT) elAct.classList.add('text-success'); 
+        }
+
+        // 2. Kit Timers 
+        // (We only update these if the job is NOT finished)
+        if (!END_TIME_ACT) {
+            const nowLive = new Date();
+            const elC1 = document.getElementById('timer-kit-cam1');
+            if(elC1) {
+                const diffC1 = Math.floor((nowLive - START_TIME_C1) / 1000);
+                elC1.innerHTML = `<i class="far fa-clock me-1"></i> ${formatSeconds(diffC1)}`;
+            }
+
+            const elC2 = document.getElementById('timer-kit-cam2');
+            if(elC2) {
+                const diffC2 = Math.floor((nowLive - START_TIME_C2) / 1000);
+                elC2.innerHTML = `<i class="far fa-clock me-1"></i> ${formatSeconds(diffC2)}`;
+            }
+        } else {
+            // Optional: Hide kit timers if job is done
+            const elC1 = document.getElementById('timer-kit-cam1');
+            const elC2 = document.getElementById('timer-kit-cam2');
+            if(elC1) elC1.style.display = 'none';
+            if(elC2) elC2.style.display = 'none';
+        }
+    }
+
+    function formatSeconds(s) {
+        if (s < 0) s = 0;
+        const h = Math.floor(s / 3600).toString().padStart(2, '0');
+        const m = Math.floor((s % 3600) / 60).toString().padStart(2, '0');
+        const sec = (s % 60).toString().padStart(2, '0');
+        return `${h}:${m}:${sec}`;
+    }
+
+    // Start Ticking
+    // If job is already done, we run once to set the final time, but don't need the interval
+    if (END_TIME_ACT) {
+        updateTimers();
+    } else {
+        setInterval(updateTimers, 1000);
+        updateTimers();
+    }
 
     let currentErrorType = null;
     let currentErrorData = null;

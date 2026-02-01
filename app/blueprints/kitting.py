@@ -8,11 +8,13 @@ import os
 import json
 from werkzeug.utils import secure_filename
 from app.config import Config
+import shutil
 
 import logging
 import traceback
 
 from bson.errors import InvalidId # Import at top
+from bson import json_util
 
 import pandas as pd
 import io
@@ -54,7 +56,7 @@ def upload_setup_image():
             os.makedirs(save_dir)
 
         # 3. Save File
-        timestamp = int(datetime.utcnow().timestamp())
+        timestamp = int(datetime.now().timestamp())
         filename = secure_filename(f"setup_{table_id}_{cam_type}_{timestamp}.jpg")
         file_path = os.path.join(save_dir, filename)
         
@@ -120,6 +122,8 @@ def start_activity():
         raw_parts = kit_def.get('parts', [])
         sanitized_parts = []
         for part in raw_parts:
+            if '_id' in part: part['_id'] = str(part['_id'])
+            
             alerts = part.get('alerts', []) or []
             part['alert_missing'] = part.get('alert_missing', 'missing' in alerts)
             part['alert_undercount'] = part.get('alert_undercount', 'undercount' in alerts)
@@ -127,9 +131,20 @@ def start_activity():
             part['found_quantity'] = 0
             part['status'] = 'pending'
             sanitized_parts.append(part)
+            
+        # --- NEW FOLDER LOGIC ---
+        # Create a safe folder name: OrderID__Timestamp
+        safe_order = secure_filename(str(data.get('order_number', 'unknown')))
+        timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        folder_name = f"{safe_order}__{timestamp_str}"
+        
+        # Create the folder immediately to ensure permissions
+        base_path = os.path.join(Config.UPLOAD_FOLDER, folder_name)
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
 
         new_activity = {
-            "start_time": datetime.utcnow(),
+            "start_time": datetime.now(),
             "table_id": data.get('table_id'),
             "kit_name": kit_def.get('kit_name'), 
             "edp_number": data.get('edp_number'),
@@ -138,18 +153,29 @@ def start_activity():
             "current_kit_index_cam1": 1,
             "current_kit_index_cam2": 1,
             "status": "on-going",
+            "storage_folder": folder_name,
             "components": sanitized_parts, 
             "history": [],
             "current_kit_errors_cam1": [], 
             "current_kit_errors_cam2": [],
             "last_detected_index_cam1": -1,
-            "last_detected_index_cam2": -1
+            "last_detected_index_cam2": -1,
+            
+            # --- ADD THIS BACK FOR LIVE TIMERS ---
+            "kit_start_time_cam1": datetime.now(),
+            "kit_start_time_cam2": datetime.now()
         }
         
         result = db.activities.insert_one(new_activity)
         new_activity['_id'] = str(result.inserted_id) 
         new_activity['activity_id'] = str(result.inserted_id)
+        
+        
         new_activity['start_time'] = new_activity['start_time'].isoformat()
+        if 'kit_start_time_cam1' in new_activity:
+            new_activity['kit_start_time_cam1'] = new_activity['kit_start_time_cam1'].isoformat()
+        if 'kit_start_time_cam2' in new_activity:
+            new_activity['kit_start_time_cam2'] = new_activity['kit_start_time_cam2'].isoformat()
         
         socketio.emit('new_kitting_started', {"tableId": data.get('table_id'), "kittingDetails": new_activity}, to=f"table_{data.get('table_id')}")
 
@@ -171,6 +197,15 @@ def sanitize_activity_for_json(activity):
     # 2. Convert Start Time
     if 'start_time' in activity and isinstance(activity['start_time'], datetime):
         activity['start_time'] = activity['start_time'].isoformat()
+        
+    if 'end_time' in activity and isinstance(activity['end_time'], datetime):
+        activity['end_time'] = activity['end_time'].isoformat()
+        
+    if 'kit_start_time_cam1' in activity and isinstance(activity['kit_start_time_cam1'], datetime):
+        activity['kit_start_time_cam1'] = activity['kit_start_time_cam1'].isoformat()
+        
+    if 'kit_start_time_cam2' in activity and isinstance(activity['kit_start_time_cam2'], datetime):
+        activity['kit_start_time_cam2'] = activity['kit_start_time_cam2'].isoformat()
 
     # 3. Helper to clean a list of errors
     def clean_error_list(error_list):
@@ -221,7 +256,7 @@ def complete_manual():
         db = get_db()
         db.activities.update_one(
             {"_id": ObjectId(data.get('activity_id'))},
-            {"$set": { "status": "completed-manually", "end_time": datetime.utcnow() }}
+            {"$set": { "status": "completed-manually", "end_time": datetime.now() }}
         )
         return jsonify({'status': 'success'})
     except Exception as e: return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -267,13 +302,33 @@ def perform_camera_completion(activity, db, table_id, cam_id, warning_type=None,
         # Clean up _id from logs to avoid duplication errors
         for err in logged_errors:
             if '_id' in err: del err['_id']
+            
+        # 3. --- NEW: CALCULATE DURATION ---
+        end_time = datetime.now()
+        start_time = activity.get(f'kit_start_time_{cam_id}')
+        
+        # Handle case where start_time might be missing (old jobs)
+        if not start_time: 
+            start_time = activity.get('start_time') # Fallback to job start
+            
+        duration_seconds = 0
+        if start_time and isinstance(start_time, datetime):
+            duration_seconds = (end_time - start_time).total_seconds()
+        elif start_time and isinstance(start_time, str):
+             # Try parsing if it's a string
+            try:
+                dt_start = datetime.fromisoformat(start_time)
+                duration_seconds = (end_time - dt_start).total_seconds()
+            except: pass
 
         # 3. Create History Document
         history_doc = {
             "activity_id": activity['_id'],
             "kit_number": current_index,
             "camera_id": cam_id,
-            "completed_at": datetime.utcnow(),
+            "completed_at": end_time,       # Kit End Time
+            "started_at": start_time,       # Kit Start Time
+            "duration_seconds": int(duration_seconds), # Elapsed Tim
             "components_snapshot": cam_components,
             "errors_snapshot": logged_errors,
             "status": "completed_with_warning" if warning_type else "completed",
@@ -322,7 +377,8 @@ def perform_camera_completion(activity, db, table_id, cam_id, warning_type=None,
                 "$set": {
                     index_key: new_index, 
                     error_key: [],
-                    last_detected_key: -1 
+                    last_detected_key: -1 ,
+                    f"kit_start_time_{cam_id}": datetime.now()
                 }
             }
         )
@@ -347,7 +403,7 @@ def perform_camera_completion(activity, db, table_id, cam_id, warning_type=None,
             # Entire Job Complete
             db.activities.update_one(
                 {"_id": activity['_id']}, 
-                {"$set": {"status": "completed_job", "end_time": datetime.utcnow()}}
+                {"$set": {"status": "completed_job", "end_time": datetime.now()}}
             )
             socketio.emit('ui_update', {"type": "job_completed"}, to=f"table_{table_id}")
         else:
@@ -462,20 +518,35 @@ def update_detection(table_id):
         # [BLOCK 3] FILE HANDLING
         # ---------------------------------------------------------------------
         # Generate a unique filename: {ActivityID}_{CamID}_{KitNum}_{Part}_{Timestamp}.jpg
-        original_filename = secure_filename(file.filename)
+        # 1. Get Folder Path
+        root_folder = activity.get('storage_folder')
         
-        # 2. Use it directly (Saving exactly what was sent)
-        file_path = os.path.join(Config.UPLOAD_FOLDER, original_filename)
+        # Fallback for old jobs created before this update
+        if not root_folder: 
+            root_folder = "" # Save in root if no folder defined
+            
+        # 2. Define Kit Subfolder: captures/ORD_DATE/kit_1/
+        kit_folder_name = f"kit_{current_kit_num}"
+        save_dir = os.path.join(Config.UPLOAD_FOLDER, root_folder, kit_folder_name)
+        
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
+        # 3. Save File
+        original_filename = secure_filename(file.filename)
+        file_path = os.path.join(save_dir, original_filename)
         file.save(file_path)
         
-        # 3. Generate URL
-        image_url = url_for('kitting.get_image', filename=original_filename)
+        # 4. Generate URL (Must include the subfolders)
+        # We join parts with '/' for the URL, regardless of OS
+        url_path = f"{root_folder}/{kit_folder_name}/{original_filename}" if root_folder else original_filename
+        image_url = url_for('kitting.get_image', filename=url_path)
 
         # Create a Rich Detection Record Object
         # This object contains all metadata to be stored in the DB (for history/debugging)
         detection_record = {
             "image_url": image_url,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(),
             "ai_class_name": ai_raw_name,
             "confidence": confidence,
             "tracking_id": tracking_id,
@@ -518,7 +589,7 @@ def update_detection(table_id):
             error_data = {
                 "error_type": "detection",
                 "reason_selected": None, # Will be filled by operator resolution
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(),
                 "error_details": {
                     "message": "wrong_part_detected",
                     "imageUrl": image_url,
@@ -577,7 +648,7 @@ def update_detection(table_id):
                 "$push": {f"{update_field}.captured_images": detection_record},
                 "$set": {
                     f"{update_field}.last_image_url": image_url,
-                    "last_updated": datetime.utcnow(),
+                    "last_updated": datetime.now(),
                     last_detected_key: target_index
                 }
             },
@@ -684,9 +755,21 @@ def validate_cycle(table_id):
                 file = request.files['image']
                 cam_id_raw = get_safe_cam_id(data.get('camId', ''))
                 kit_idx = activity.get(f'current_kit_index_{cam_id_raw}', 1)
-                filename = secure_filename(f"{activity['_id']}_{cam_id_raw}_punch_kit{kit_idx}_{int(datetime.utcnow().timestamp())}.jpg")
-                file.save(os.path.join(Config.UPLOAD_FOLDER, filename))
-                image_url = url_for('kitting.get_image', filename=filename)
+                
+                # --- NEW FOLDER LOGIC ---
+                root_folder = activity.get('storage_folder', '')
+                kit_folder_name = f"kit_{kit_idx}"
+                save_dir = os.path.join(Config.UPLOAD_FOLDER, root_folder, kit_folder_name)
+                
+                if not os.path.exists(save_dir):
+                    os.makedirs(save_dir)
+
+                filename = secure_filename(f"{activity['_id']}_{cam_id_raw}_punch_{int(datetime.now().timestamp())}.jpg")
+                file.save(os.path.join(save_dir, filename))
+                
+                # Generate URL
+                url_path = f"{root_folder}/{kit_folder_name}/{filename}" if root_folder else filename
+                image_url = url_for('kitting.get_image', filename=url_path)
         elif request.is_json:
             data = request.json
         
@@ -744,7 +827,7 @@ def validate_cycle(table_id):
             error_data = {
                 "error_type": "validation",
                 "reason_selected": None,
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(),
                 "error_details": {
                     "message": "validation_failed",
                     "imageUrl": image_url,
@@ -781,7 +864,7 @@ def validate_cycle(table_id):
                     "cam_id": cam_id,
                     "status": "validation_failed",
                     "validation_image": image_url,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now().isoformat(),
                     "missing": missing,
                     "undercount": undercount,
                     "overcount": overcount,
@@ -831,7 +914,7 @@ def validate_cycle(table_id):
                 "cam_id": cam_id,
                 "status": "completed_with_warning" if warning_status else "completed",
                 "validation_image": image_url,
-                "completed_at": datetime.utcnow().isoformat(),
+                "completed_at": datetime.now().isoformat(),
                 "warnings": overcount if overcount else [],
                 "components_summary": component_details,
                 "anomalies_resolved": anomalies_summary
@@ -868,7 +951,7 @@ def resolve_error(table_id):
         "kit_number": activity.get(f'current_kit_index_{cam_id}', 1),
         "camera_id": cam_id,
         "table_id": table_id,
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.now(),
         "error_type": data.get('error_type'),
         "reason_selected": data.get('reason'),
         "error_details": error_details 
@@ -1293,9 +1376,25 @@ VM_BASE_URL = Config.SOCKET_SERVER_URL
 # Fallback if config is missing (optional safety)
 if not VM_BASE_URL:
     VM_BASE_URL = "http://localhost:5000"
+    
+def format_duration(seconds):
+    """Converts seconds (int/float) to '1h 20m 30s' format."""
+    if seconds is None: return "N/A"
+    try:
+        seconds = int(seconds)
+        if seconds < 0: return "N/A"
+        m, s = divmod(seconds, 60)
+        h, m = divmod(m, 60)
+        
+        parts = []
+        if h > 0: parts.append(f"{h}h")
+        if m > 0: parts.append(f"{m}m")
+        parts.append(f"{s}s")
+        return " ".join(parts)
+    except:
+        return "N/A"
 
 
-# --- HELPER: Build PDF Content for One Camera ---
 def build_camera_pdf_section(activity_id, camera_key, db, styles):
     elements = []
     
@@ -1326,21 +1425,26 @@ def build_camera_pdf_section(activity_id, camera_key, db, styles):
         hist = history_map.get(k_num, {})
         errs = error_map.get(k_num, [])
 
-        # 1. Kit Status Header
+        # 1. Kit Status & DURATION
         status = "Completed"
         color = "green"
         if errs: 
             status = f"Issues Found (Fixed {len(errs)})"
             color = "red"
         
-        elements.append(Paragraph(f"<b>KIT {k_num}</b> - <font color='{color}'>{status}</font>", styles['Heading3']))
+        # --- NEW: Get Duration ---
+        duration_sec = hist.get('duration_seconds')
+        duration_str = format_duration(duration_sec)
+        
+        # Add Duration to the Header Line
+        header_text = f"<b>KIT {k_num}</b> - <font color='{color}'>{status}</font> (Time: {duration_str})"
+        elements.append(Paragraph(header_text, styles['Heading3']))
         
         timestamp = hist.get('completed_at') or hist.get('timestamp') or "N/A"
-        elements.append(Paragraph(f"Time: {timestamp}", styles['Normal']))
+        elements.append(Paragraph(f"Finished at: {timestamp}", styles['Normal']))
         elements.append(Spacer(1, 6))
 
-        # 2. Detections Table (NOW WITH IMAGES)
-        # Columns: ID, Name, Conf, Image Link
+        # 2. Detections Table
         data = [['Tracking ID', 'Object Name', 'Confidence', 'Image']]
         
         components = hist.get('components_snapshot', [])
@@ -1383,7 +1487,7 @@ def build_camera_pdf_section(activity_id, camera_key, db, styles):
         
         elements.append(Spacer(1, 6))
 
-        # 3. VALIDATION IMAGE (The Final Proof)
+        # 3. VALIDATION IMAGE
         val_img = hist.get('validation_image_url')
         if val_img:
             val_url = f"{VM_BASE_URL}{val_img}"
@@ -1437,16 +1541,44 @@ def download_pdf_report(activity_id):
         styles = getSampleStyleSheet()
         story = []
 
-        # Title
-        story.append(Paragraph(f"Kitting Report: {activity_id}", styles['Title']))
-        story.append(Paragraph(f"Image Source: {VM_BASE_URL}", styles['Normal']))
+        # 1. Fetch Activity to get Start/End Times
+        activity = db.activities.find_one({"_id": ObjectId(activity_id)})
+        
+        total_duration_str = "N/A"
+        if activity:
+            start_t = activity.get('start_time')
+            end_t = activity.get('end_time')
+            
+            # If not finished yet, use current time for calculation
+            if not end_t and activity.get('status') == 'on-going':
+                end_t = datetime.now()
+            
+            # Calculate Duration
+            if start_t and end_t:
+                if isinstance(start_t, str): start_t = datetime.fromisoformat(start_t)
+                if isinstance(end_t, str): end_t = datetime.fromisoformat(end_t)
+                
+                # Check types again after conversion
+                if isinstance(start_t, datetime) and isinstance(end_t, datetime):
+                    total_sec = (end_t - start_t).total_seconds()
+                    total_duration_str = format_duration(total_sec)
+
+        # 2. PDF Title Section
+        story.append(Paragraph(f"Kitting Report", styles['Title']))
+        story.append(Paragraph(f"<b>Job ID:</b> {activity_id}", styles['Normal']))
+        if activity:
+            story.append(Paragraph(f"<b>PO Number:</b> {activity.get('order_number', 'N/A')}", styles['Normal']))
+            story.append(Paragraph(f"<b>Total Elapsed Time:</b> {total_duration_str}", styles['Normal']))
+        
+        story.append(Spacer(1, 12))
+        story.append(Paragraph(f"Image Source: {VM_BASE_URL}", styles['Italic']))
         story.append(Spacer(1, 12))
 
-        # Camera 1 Section
+        # 3. Camera 1 Section
         story.extend(build_camera_pdf_section(activity_id, "cam1", db, styles))
         story.append(PageBreak()) 
 
-        # Camera 2 Section
+        # 4. Camera 2 Section
         story.extend(build_camera_pdf_section(activity_id, "cam2", db, styles))
 
         # Build PDF
@@ -1463,3 +1595,76 @@ def download_pdf_report(activity_id):
     except Exception as e:
         current_app.logger.error(f"PDF Error: {e}")
         return jsonify({"message": "Failed to generate PDF", "error": str(e)}), 500
+    
+    
+    
+    
+
+
+
+
+ADMIN_PASSWORD = "admin"  # Change this to your desired password
+
+def cleanup_activity_files(db, activity_id):
+    """
+    Deletes the entire folder associated with the activity.
+    Structure: captures/ORDER_DATE/...
+    """
+    try:
+        oid = ObjectId(activity_id)
+        activity = db.activities.find_one({"_id": oid})
+        
+        if not activity: return
+
+        # 1. Get the main folder name
+        folder_name = activity.get('storage_folder')
+        
+        if folder_name:
+            # SAFETY CHECK: Ensure we don't delete the root 'captures' folder
+            # by ensuring folder_name is not empty and doesn't contain '..'
+            if folder_name.strip() and '..' not in folder_name:
+                folder_path = os.path.join(Config.UPLOAD_FOLDER, folder_name)
+                
+                if os.path.exists(folder_path):
+                    shutil.rmtree(folder_path) # Deletes folder and all contents
+                    current_app.logger.info(f"Deleted folder: {folder_path}")
+        else:
+            # Fallback for OLD jobs (Legacy "Harvest" logic)
+            # You can leave the old code here inside an 'else' block if you want to support deleting old jobs,
+            # or just skip it since new jobs are the priority.
+            pass
+
+    except Exception as e:
+        current_app.logger.error(f"Error during folder cleanup: {e}")
+        
+        
+@kitting_bp.route('/api/delete_activity', methods=['POST'])
+def delete_activity():
+    try:
+        data = request.json
+        password = data.get('password')
+        activity_id = data.get('activity_id')
+
+        # 1. Security Check
+        if password != ADMIN_PASSWORD:
+            return jsonify({'status': 'error', 'message': 'Incorrect Admin Password'}), 403
+
+        db = get_db()
+        oid = ObjectId(activity_id)
+
+        # 2. Clean up physical files first
+        cleanup_activity_files(db, activity_id)
+
+        # 3. Delete Database Records
+        # A. Main Activity
+        db.activities.delete_one({"_id": oid})
+        # B. History Records
+        db.kit_history.delete_many({"activity_id": oid})
+        # C. Error Logs
+        db.error_logs.delete_many({"activity_id": oid})
+
+        return jsonify({'status': 'success', 'message': 'Activity and files deleted successfully'})
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+

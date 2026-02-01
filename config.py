@@ -25,8 +25,8 @@ class Config:
     # Socket Server Configuration
     # This URL is passed to the frontend so JS knows where to connect
     # Use your actual IP or 0.0.0.0 so it listens on all interfaces
-    #SOCKET_SERVER_URL = os.environ.get('SOCKET_SERVER_URL', 'http://192.168.29.82:5000')
-    SOCKET_SERVER_URL = os.environ.get('SOCKET_SERVER_URL', 'https://watts-water-kitting.app-assertai.com/')
+    SOCKET_SERVER_URL = os.environ.get('SOCKET_SERVER_URL', 'http://localhost:5000')
+    #SOCKET_SERVER_URL = os.environ.get('SOCKET_SERVER_URL', 'https://watts-water-kitting.app-assertai.com/')
 
 class DevelopmentConfig(Config):
     DEBUG = True

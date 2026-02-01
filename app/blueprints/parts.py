@@ -53,7 +53,7 @@ def save_kit():
             "kit_name": data['kit_name'],
             "edp_number": data['edp_number'],
             "parts": data.get('parts', []), 
-            "updated_at": datetime.utcnow()
+            "updated_at": datetime.now()
         }
 
         if data.get('kit_id'):
@@ -63,7 +63,7 @@ def save_kit():
             )
             message = "Kit updated successfully!"
         else:
-            kit_doc["created_at"] = datetime.utcnow()
+            kit_doc["created_at"] = datetime.now()
             db.kits.insert_one(kit_doc)
             message = "Kit created successfully!"
 
