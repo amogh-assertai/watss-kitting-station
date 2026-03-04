@@ -1058,7 +1058,8 @@ def get_kit_history_details(activity_id, cam_id, kit_number):
             "errors": cleaned_errors,
             
             # --- NEW FIELD ADDED HERE ---
-            "validation_image_url": record.get('validation_image_url') 
+            "validation_image_url": record.get('validation_image_url'),
+            "duration_seconds": record.get('duration_seconds', 0) 
         })
 
     except Exception as e:

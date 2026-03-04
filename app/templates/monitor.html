@@ -248,10 +248,28 @@
         height: 100%;
         background-color: rgba(220, 38, 38, 0.98);
         z-index: 20000;
-        flex-direction: column;
+        flex-direction: row; /* Changed to row for side-by-side */
         align-items: center;
         justify-content: center;
-        text-align: center;
+        gap: 60px; /* Space between steps and white card */
+        padding: 40px;
+    }
+
+    /* NEW: Styles for the steps on the red background */
+    .error-steps-panel {
+        color: white;
+        max-width: 450px;
+        text-align: left;
+    }
+
+    .error-step-item {
+        background: rgba(255, 255, 255, 0.1);
+        border-left: 5px solid white;
+        padding: 15px 20px;
+        margin-bottom: 15px;
+        border-radius: 6px;
+        font-size: 1.15rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
 
     .error-card {
@@ -260,8 +278,8 @@
         padding: 30px;
         border-radius: 12px;
         box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
-        max-width: 600px;
-        width: 90%;
+        max-width: 900px;
+        width: 95%;
         text-align: left;
     }
 
@@ -476,11 +494,18 @@
 <audio id="error-audio" src="{{ url_for('static', filename='alarm.mp3') }}" preload="auto" loop></audio>
 
 <div id="kit-error-overlay">
+    <div class="error-steps-panel" id="err-steps-panel">
+        <h2 class="fw-bold mb-4"><i class="fas fa-clipboard-list me-2"></i> How to Resolve:</h2>
+        <div id="err-steps-content"></div>
+    </div>
+
     <div class="error-card">
         <div class="text-center mb-2"><i class="fas fa-exclamation-circle fa-4x text-danger"></i></div>
         <h2 class="fw-bold text-danger text-center mb-1" id="err-title">VALIDATION FAILED</h2>
         <h5 class="text-muted text-center mb-4" id="err-subtitle">Action Required</h5>
+        
         <div id="err-content" class="mb-4 bg-light p-3 rounded border"></div>
+        
         <label class="fw-bold text-secondary mb-1">Select Resolution Reason:</label>
         <select class="form-select reason-select" id="err-reason">
             <option value="" disabled selected>-- Choose Action --</option>
@@ -740,6 +765,7 @@
 <script>
     const TABLE_ID = "{{ activity.table_id }}";
     const ACT_ID = "{{ activity._id }}";
+    const ORDER_NUMBER = "{{ activity.order_number }}";
     const socket = io(SOCKET_URL, { transports: ['websocket'], upgrade: false });
 
     // --- TIMERS: READ START & END TIMES ---
@@ -996,10 +1022,34 @@
         const overlay = document.getElementById('kit-error-overlay');
         playAlarm(); // <--- START SOUND
         document.getElementById('err-title').innerText = type === 'detection' ? "WRONG PART DETECTED" : "VALIDATION FAILED";
+        
+        
+        // --- 1. SET THE STEPS ON THE LEFT (RED BACKGROUND) ---
+        let stepsHtml = '';
+        if (type === 'detection') {
+            stepsHtml = `
+                <div class="error-step-item"><strong>Step 1:</strong> Identify the highlighted object in the image.</div>
+                <div class="error-step-item"><strong>Step 2:</strong> Remove the wrong or extra part from the kitting area.</div>
+                 <div class="error-step-item"><strong>Step 3:</strong> If right object detected as wrong, show the part again after Confirming.</div>
+                <div class="error-step-item"><strong>Step 4:</strong> Clear the parts ROI and proceed with acknowledgement</div>
+                <div class="error-step-item"><strong>Step 5:</strong> After Acknowledgement, continue with the exsisting kit</div>
+            `;
+        } else {
+            stepsHtml = `
+                <div class="error-step-item"><strong>Step 1:</strong> Review the missing or extra parts listed in the white box.</div>
+                <div class="error-step-item"><strong>Step 2:</strong> Add missing parts or remove extra parts from the kit.</div>
+                <div class="error-step-item"><strong>Step 3:</strong> Complete the exsisting kit fully till sealing the bag</div>
+                <div class="error-step-item"><strong>Step 4:</strong> Clear the parts ROI and proceed with acknowledgement and coontinue with next kit</div>
+            `;
+        }
+        document.getElementById('err-steps-content').innerHTML = stepsHtml;
+        
+        
+        
         let contentHtml = '';
         let imgHtml = '';
         if (data.imageUrl) {
-            imgHtml = `<div class="text-center mt-3"><img src="${data.imageUrl}" class="img-fluid rounded border shadow-sm" style="max-height: 200px; object-fit: contain; background: #fff;"></div>`;
+            imgHtml = `<div class="text-center mt-3"><img src="${data.imageUrl}" class="img-fluid rounded border shadow-sm" style="max-height: 450px; width: 100%; object-fit: contain; background: #fff;"></div>`;
         }
         if (type === 'detection') {
             contentHtml = `<div class="text-center"><h4 class="fw-bold text-dark">${data.detectedPart}</h4></div>`;
@@ -1013,7 +1063,7 @@
         document.getElementById('err-content').innerHTML = contentHtml;
         const select = document.getElementById('err-reason');
         select.innerHTML = '<option value="" disabled selected>-- Choose Action --</option>';
-        ["Trash Removed", "Operator Override", "System Error"].forEach(r => select.innerHTML += `<option value="${r}">${r}</option>`);
+        ["System Error", "Acknoledge after resolving error"].forEach(r => select.innerHTML += `<option value="${r}">${r}</option>`);
         overlay.style.display = 'flex';
     }
 
@@ -1058,11 +1108,14 @@
     function backToGrid() {
         document.getElementById('detail-view').classList.add('d-none');
         document.getElementById('grid-view').classList.remove('d-none');
+        document.getElementById('modalTitle').innerText = `History for ${currentHistoryCam.toUpperCase()}`;
     }
 
     async function loadKitDetails(kitNum) {
         document.getElementById('grid-view').classList.add('d-none');
         document.getElementById('detail-view').classList.remove('d-none');
+        const titleEl = document.getElementById('modalTitle');
+        if (titleEl) titleEl.innerText = `Loading Kit #${kitNum}...`;
         try {
             const res = await fetch(`/kitting/api/history/${ACT_ID}/${currentHistoryCam}/${kitNum}`);
             const data = await res.json();
@@ -1073,6 +1126,18 @@
             const valImgDiv = document.getElementById('detail-validation-img');
             compRow.innerHTML = ''; errRow.innerHTML = '';
             if (data.status === 'success') {
+                // --- NEW: UPDATE HEADER WITH DETAILS ---
+                const duration = data.duration_seconds ? formatSeconds(data.duration_seconds) : "N/A";
+                // Format: CAM1 | Kit #1 | PO: 123 | Time: 00:45
+                titleEl.innerHTML = `
+                    <span class="text-primary fw-bold">${currentHistoryCam.toUpperCase()}</span> 
+                    <span class="text-muted mx-2">|</span> 
+                    Kit #${kitNum} 
+                    <span class="text-muted mx-2">|</span> 
+                    PO: ${ORDER_NUMBER} 
+                    <span class="text-muted mx-2">|</span> 
+                    <i class="far fa-clock me-1"></i> ${duration}
+                `;
                 if (data.validation_image_url || (data.errors && data.errors.some(e => e.error_type === 'validation'))) {
                     let vUrl = data.validation_image_url;
                     if (vUrl) {
