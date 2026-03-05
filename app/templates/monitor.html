@@ -774,12 +774,21 @@
     const TIME_C1_STR = "{{ activity.kit_start_time_cam1 }}";
     const TIME_C2_STR = "{{ activity.kit_start_time_cam2 }}";
 
-    // Convert to Date Objects
-    const START_TIME_ACT = TIME_ACT_STR && TIME_ACT_STR !== 'None' ? new Date(TIME_ACT_STR) : new Date();
-    const END_TIME_ACT   = TIME_END_STR && TIME_END_STR !== 'None' ? new Date(TIME_END_STR) : null; // <--- NEW
+    // NEW HELPER: Force browser to read naive server strings as UTC
+    function parseUTCDate(dateStr) {
+        if (!dateStr || dateStr === 'None') return null;
+        if (!dateStr.endsWith('Z') && !dateStr.match(/[+\-]\d{2}:\d{2}$/)) {
+            dateStr += 'Z'; 
+        }
+        return new Date(dateStr);
+    }
+
+    // Convert to Date Objects using the new helper
+    const START_TIME_ACT = parseUTCDate(TIME_ACT_STR) || new Date();
+    const END_TIME_ACT   = parseUTCDate(TIME_END_STR); 
     
-    const START_TIME_C1 = TIME_C1_STR ? new Date(TIME_C1_STR) : new Date();
-    const START_TIME_C2 = TIME_C2_STR ? new Date(TIME_C2_STR) : new Date();
+    const START_TIME_C1 = parseUTCDate(TIME_C1_STR) || new Date();
+    const START_TIME_C2 = parseUTCDate(TIME_C2_STR) || new Date()
 
     function updateTimers() {
         // If job is finished, use the End Time. Otherwise use "Now".
