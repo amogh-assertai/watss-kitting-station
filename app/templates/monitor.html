@@ -783,12 +783,32 @@
         return new Date(dateStr);
     }
 
-    // Convert to Date Objects using the new helper
-    const START_TIME_ACT = parseUTCDate(TIME_ACT_STR) || new Date();
+    // 1. Convert strings to Date Objects using the helper
+    let START_TIME_ACT = parseUTCDate(TIME_ACT_STR) || new Date();
     const END_TIME_ACT   = parseUTCDate(TIME_END_STR); 
-    
-    const START_TIME_C1 = parseUTCDate(TIME_C1_STR) || new Date();
-    const START_TIME_C2 = parseUTCDate(TIME_C2_STR) || new Date()
+    let START_TIME_C1 = parseUTCDate(TIME_C1_STR) || new Date();
+    let START_TIME_C2 = parseUTCDate(TIME_C2_STR) || new Date();
+
+    // 2. --- CLOCK DRIFT CORRECTION (Smooth Start) ---
+    const nowPC = new Date();
+
+    // Fix Total Activity Timer (if within 5 seconds of server)
+    const driftAct = Math.floor((nowPC - START_TIME_ACT) / 1000);
+    if (!END_TIME_ACT && driftAct > 0 && driftAct < 5) {
+        START_TIME_ACT = nowPC;
+    }
+
+    // Fix Cam 1 Timer
+    const driftC1 = Math.floor((nowPC - START_TIME_C1) / 1000);
+    if (driftC1 > 0 && driftC1 < 5) {
+        START_TIME_C1 = nowPC;
+    }
+
+    // Fix Cam 2 Timer
+    const driftC2 = Math.floor((nowPC - START_TIME_C2) / 1000);
+    if (driftC2 > 0 && driftC2 < 5) {
+        START_TIME_C2 = nowPC;
+    }
 
     function updateTimers() {
         // If job is finished, use the End Time. Otherwise use "Now".
