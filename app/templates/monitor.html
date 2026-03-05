@@ -1031,7 +1031,7 @@
                 <div class="error-step-item"><strong>Step 1:</strong> Identify the highlighted object in the image.</div>
                 <div class="error-step-item"><strong>Step 2:</strong> Remove the wrong or extra part from the kitting area.</div>
                  <div class="error-step-item"><strong>Step 3:</strong> If right object detected as wrong, show the part again after Confirming.</div>
-                <div class="error-step-item"><strong>Step 4:</strong> Clear the parts ROI and proceed with acknowledgement</div>
+                <div class="error-step-item"><strong>Step 4:</strong> Clear the parts Area and proceed with acknowledgement</div>
                 <div class="error-step-item"><strong>Step 5:</strong> After Acknowledgement, continue with the exsisting kit</div>
             `;
         } else {
@@ -1039,7 +1039,7 @@
                 <div class="error-step-item"><strong>Step 1:</strong> Review the missing or extra parts listed in the white box.</div>
                 <div class="error-step-item"><strong>Step 2:</strong> Add missing parts or remove extra parts from the kit.</div>
                 <div class="error-step-item"><strong>Step 3:</strong> Complete the exsisting kit fully till sealing the bag</div>
-                <div class="error-step-item"><strong>Step 4:</strong> Clear the parts ROI and proceed with acknowledgement and coontinue with next kit</div>
+                <div class="error-step-item"><strong>Step 4:</strong> Clear the parts Area and proceed with acknowledgement and continue with next kit</div>
             `;
         }
         document.getElementById('err-steps-content').innerHTML = stepsHtml;
@@ -1063,7 +1063,7 @@
         document.getElementById('err-content').innerHTML = contentHtml;
         const select = document.getElementById('err-reason');
         select.innerHTML = '<option value="" disabled selected>-- Choose Action --</option>';
-        ["System Error", "Acknoledge after resolving error"].forEach(r => select.innerHTML += `<option value="${r}">${r}</option>`);
+        ["System Error", "Process error"].forEach(r => select.innerHTML += `<option value="${r}">${r}</option>`);
         overlay.style.display = 'flex';
     }
 

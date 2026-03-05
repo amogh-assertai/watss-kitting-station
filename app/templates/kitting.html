@@ -105,7 +105,7 @@
                         <div class="d-grid gap-3">
                             <div class="col-12">
                                 <label class="form-label fw-bold">Select Station</label>
-                                <select class="form-select" id="tableId" required>
+                                <select class="form-select scanner-input" id="tableId" required>
                                     <option value="" disabled>Choose Table...</option>
                                     <option value="1" selected>Table1(CELL-HVGKC)</option>
                                     <option value="2">Table 2</option>
@@ -114,22 +114,25 @@
                                     <option value="5">Table 5</option>
                                 </select>
                             </div>
+                            
                             <div class="col-12">
-                                <label class="form-label fw-bold">Order Number</label>
-                                <input type="text" class="form-control" id="orderNumber" placeholder="e.g. ORD-2025-001" required>
+                                <label class="form-label fw-bold">Order Number <small class="text-primary">(Scan First)</small></label>
+                                <input type="text" class="form-control form-control-lg scanner-input" id="orderNumber" placeholder="Scan or type Order #" required>
                             </div>
-                            <hr class="my-1">
+                            
                             <div class="col-12">
-                                <label class="form-label fw-bold">Kit Name</label>
-                                <input type="text" class="form-control" id="kitName" placeholder="Enter Kit Name" required>
+                                <label class="form-label fw-bold">EDP Number <small class="text-primary">(Scan Second)</small></label>
+                                <input type="text" class="form-control form-control-lg scanner-input" id="edpNumber" placeholder="Scan EDP to fetch Kit Name" required>
                             </div>
+                            
                             <div class="col-12">
-                                <label class="form-label fw-bold">EDP Number</label>
-                                <input type="text" class="form-control" id="edpNumber" placeholder="Enter EDP Number" required>
+                                <label class="form-label fw-bold">Kit Name <small class="text-muted">(Auto-filled)</small></label>
+                                <input type="text" class="form-control form-control-lg readonly-input" id="kitName" placeholder="Will populate automatically..." readonly required>
                             </div>
+                            
                             <div class="col-12">
                                 <label class="form-label fw-bold">Units to Pack</label>
-                                <input type="number" class="form-control" id="packUnits" min="1" value="1" required>
+                                <input type="number" class="form-control form-control-lg scanner-input" id="packUnits" min="1" value="70" required>
                             </div>
                         </div>
                     </form>
@@ -551,5 +554,82 @@
             alert("Connection error. Could not update status.");
         }
     }
+
+    // --- SCANNER AUTO-ADVANCE LOGIC ---
+    document.addEventListener('DOMContentLoaded', () => {
+        const tableInput = document.getElementById('tableId');
+        const orderInput = document.getElementById('orderNumber');
+        const edpInput = document.getElementById('edpNumber');
+        const kitNameInput = document.getElementById('kitName');
+        const unitsInput = document.getElementById('packUnits');
+
+        // Auto-focus Station Select when modal opens
+        const modalEl = document.getElementById('newActivityModal');
+        if(modalEl) {
+            modalEl.addEventListener('shown.bs.modal', () => orderInput.focus());
+        }
+
+        // 1. Enter on Station -> Focus Order Number
+        tableInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                orderInput.focus();
+            }
+        });
+
+        // 2. Scan Order Number -> Focus EDP Number
+        orderInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (this.value.trim() !== '') edpInput.focus();
+            }
+        });
+
+        // 3. Scan EDP Number -> Fetch Kit Name -> Focus Units
+        edpInput.addEventListener('keydown', async function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const edpVal = this.value.trim();
+                
+                if (edpVal !== '') {
+                    kitNameInput.value = "Fetching from database...";
+                    try {
+                        // We will add this API route to Python in the next step!
+                        const res = await fetch(`/kitting/api/get_kit_by_edp/${edpVal}`);
+                        const data = await res.json();
+                        
+                        if (data.status === 'success') {
+                            kitNameInput.value = data.kit_name; // Auto-fill
+                            // Hide any previous errors if successful
+                            document.getElementById('validationAlert').classList.add('d-none');
+                            unitsInput.focus();                 // Jump to next
+                        } else {
+                            kitNameInput.value = "Kit Not Found!";
+                            this.value = ''; // Clear wrong EDP
+                            
+                            // Show error inside the modal instead of an alert pop-up
+                            const alertBox = document.getElementById('validationAlert');
+                            alertBox.innerText = "Error: No kit matches this EDP Number.";
+                            alertBox.classList.remove('d-none');
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        kitNameInput.value = "Network Error";
+                        const alertBox = document.getElementById('validationAlert');
+                        alertBox.innerText = "Network Error: Could not fetch kit details.";
+                        alertBox.classList.remove('d-none');
+                    }
+                }
+            }
+        });
+
+        // 4. Enter on Units -> Automatically Click "Next"
+        unitsInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                validateAndProceed(); 
+            }
+        });
+    });
 </script>
 {% endblock %}

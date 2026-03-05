@@ -1113,6 +1113,31 @@ def get_active_errors(table_id):
         current_app.logger.error(f"Error fetching active errors: {str(e)}")
         return jsonify({"message": "Internal Error", "error": str(e)}), 500
     
+
+# --- NEW ROUTE: FETCH KIT BY EDP (FOR SCANNER AUTO-FILL) ---
+@kitting_bp.route('/api/get_kit_by_edp/<edp_number>', methods=['GET'])
+def get_kit_by_edp(edp_number):
+    try:
+        db = get_db()
+        clean_edp = edp_number.strip()
+        
+        # Search the database. EDP numbers might be saved as strings or integers, 
+        # so we check for both to be safe.
+        search_query = [{"edp_number": clean_edp}]
+        if clean_edp.isdigit():
+            search_query.append({"edp_number": int(clean_edp)})
+            
+        kit = db.kits.find_one({"$or": search_query})
+        
+        if kit and kit.get('kit_name'):
+            return jsonify({'status': 'success', 'kit_name': kit.get('kit_name')}), 200
+        else:
+            return jsonify({'status': 'error', 'message': 'Kit not found'}), 404
+            
+    except Exception as e:
+        current_app.logger.error(f"Error fetching kit by EDP: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    
     
 ######## on-demand APIS starts #######################
 ######## on-demand APIS starts #######################
@@ -1155,6 +1180,7 @@ def get_ongoing_activity_details(table_id):
     except Exception as e:
         current_app.logger.error(f"Error fetching activity details: {str(e)}")
         return jsonify({"message": "Internal Error", "error": str(e)}), 500
+
 
 
 
