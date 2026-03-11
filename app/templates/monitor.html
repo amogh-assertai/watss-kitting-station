@@ -923,8 +923,12 @@
                 qtyDiv.innerHTML = `<span class="text-primary fw-bold">Qty: ${found} / ${required}</span>`;
             }
 
-            // 2. Move badge
-            document.querySelectorAll('.last-detected-badge').forEach(el => el.remove());
+            // 2. Move badge (Target only the specific camera's column)
+            const camColumn = document.getElementById(`pending-row-${camId}`).closest('.cam-column');
+            if (camColumn) {
+                camColumn.querySelectorAll('.last-detected-badge').forEach(el => el.remove());
+            }
+
             const badge = document.createElement('div');
             badge.className = 'last-detected-badge';
             badge.innerText = 'Last Detected';
@@ -979,8 +983,13 @@
             return;
         }
 
-        const rawCam = String(data.camId || (data.popup_data ? data.popup_data.camId : '')).toLowerCase();
-        let targetCam = 'cam2'; if (rawCam.includes('1')) targetCam = 'cam1';
+        // Detect camera source independently
+        let rawCam = '';
+        if (data.camId) rawCam = String(data.camId);
+        else if (data.popup_data && data.popup_data.camId) rawCam = String(data.popup_data.camId);
+        else if (data.completed_cam) rawCam = String(data.completed_cam);
+
+        let targetCam = rawCam.toLowerCase().includes('1') ? 'cam1' : 'cam2';
         const overlayId = `overlay-${targetCam}`;
         const overlay = document.getElementById(overlayId);
 
@@ -1039,8 +1048,24 @@
             overlay.className = `side-popup ${themeClass} animate-pop`;
             overlay.style.display = 'flex';
 
-            // --- FIX 4: REDUCED TIMER TO 1.5s ---
-            timers[targetCam] = setTimeout(() => window.location.reload(), 1500);
+                        // Independent Reset: Hide the overlay and clear the local cards for THIS camera only
+            if (timers[targetCam]) clearTimeout(timers[targetCam]);
+
+            timers[targetCam] = setTimeout(() => {
+                overlay.style.display = 'none';
+                
+                // Clear only this camera's UI elements to "start fresh" for the next kit
+                document.getElementById(`pending-row-${targetCam}`).innerHTML = '';
+                document.getElementById(`completed-row-${targetCam}`).innerHTML = '';
+                
+                // IMPORTANT: If your backend sends the new kit data via socket immediately after 
+                // completion, the UI will rebuild itself. 
+                // If not, we trigger a targeted fetch for the new kit details here:
+                // fetchNewKitData(targetCam); 
+                
+                // If you absolutely MUST reload the page to get new data, use:
+                window.location.reload(); 
+            }, 2000);
         }
     });
 
