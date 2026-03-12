@@ -9,6 +9,14 @@ ADMIN_PASSWORD = "admin"
 
 # ... (verify_admin and panel routes remain the same) ...
 
+@msg_bp.route('/verify_admin', methods=['POST'])
+def verify_admin():
+    password = request.json.get('password') # The JS sends this
+    if password == ADMIN_PASSWORD:
+        session['is_admin'] = True
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error"}), 401
+
 @msg_bp.route('/broadcast', methods=['POST'])
 def broadcast():
     if not session.get('is_admin'): return jsonify({"status": "unauthorized"}), 403
