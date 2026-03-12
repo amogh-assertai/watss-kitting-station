@@ -23,10 +23,13 @@ def create_app():
     from app.blueprints.home import home_bp
     from app.blueprints.parts import parts_bp
     from app.blueprints.kitting import kitting_bp
+    from app.blueprints.sop_handler import sop_bp
+
 
     app.register_blueprint(home_bp)
     app.register_blueprint(parts_bp)
     app.register_blueprint(kitting_bp)
+    app.register_blueprint(sop_bp)
 
     # Initialize SocketIO with the App
     # --- FIX IS HERE: Add cors_allowed_origins="*" ---

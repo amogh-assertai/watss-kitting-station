@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-5" style="max-width: 600px;">
+    <div class="card shadow border-0">
+        <div class="card-header bg-danger text-white p-3">
+            <h4 class="mb-0"><i class="fas fa-bullhorn me-2"></i> SOP Broadcast Admin</h4>
+        </div>
+        <div class="card-body p-4">
+            <div class="mb-3">
+                <label class="fw-bold">Intervention Message</label>
+                <textarea id="msg" class="form-control" rows="2" placeholder="e.g. Stop work and put on Safety Vest"></textarea>
+            </div>
+            
+            <div class="mb-3">
+                <label class="fw-bold">Required Checkboxes (one per line)</label>
+                <textarea id="opts" class="form-control" rows="3" placeholder="I have put on my vest&#10;I have informed the lead"></textarea>
+            </div>
+
+            <div class="mb-4">
+                <label class="fw-bold text-danger">Admin Password</label>
+                <input type="password" id="pass" class="form-control" placeholder="Enter password to verify">
+            </div>
+
+            <button onclick="sendAlert()" class="btn btn-danger w-100 py-2 fw-bold">
+                BROADCAST TO ALL SCREENS
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+async function sendAlert() {
+    const data = {
+        message: document.getElementById('msg').value,
+        options: document.getElementById('opts').value.split('\n').filter(x => x.trim()),
+        password: document.getElementById('pass').value
+    };
+
+    const res = await fetch('/sop/broadcast', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    });
+
+    if (res.ok) {
+        alert("Alert Broadcasted Successfully!");
+    } else {
+        const err = await res.json();
+        alert("Error: " + err.message);
+    }
+}
+</script>
+{% endblock %}
