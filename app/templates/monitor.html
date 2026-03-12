@@ -1048,23 +1048,34 @@
             overlay.className = `side-popup ${themeClass} animate-pop`;
             overlay.style.display = 'flex';
 
-                        // Independent Reset: Hide the overlay and clear the local cards for THIS camera only
+            // Independent Reset: Hide the overlay and clear the local cards for THIS camera only
             if (timers[targetCam]) clearTimeout(timers[targetCam]);
 
             timers[targetCam] = setTimeout(() => {
                 overlay.style.display = 'none';
                 
                 // Clear only this camera's UI elements to "start fresh" for the next kit
-                document.getElementById(`pending-row-${targetCam}`).innerHTML = '';
-                document.getElementById(`completed-row-${targetCam}`).innerHTML = '';
+                const pendingRow = document.getElementById(`pending-row-${targetCam}`);
+                const completedRow = document.getElementById(`completed-row-${targetCam}`);
+                if (pendingRow) pendingRow.innerHTML = '';
+                if (completedRow) completedRow.innerHTML = '';
                 
-                // IMPORTANT: If your backend sends the new kit data via socket immediately after 
-                // completion, the UI will rebuild itself. 
-                // If not, we trigger a targeted fetch for the new kit details here:
-                // fetchNewKitData(targetCam); 
-                
-                // If you absolutely MUST reload the page to get new data, use:
-                window.location.reload(); 
+                // --- FIX: GRACEFUL DISCONNECT & RELOAD LOCK ---
+                if (!window.isReloading) {
+                    window.isReloading = true; // Lock it so the other camera can't double-trigger
+                    
+                    console.log(`Politely disconnecting socket for ${targetCam} before reloading...`);
+                    
+                    // Cleanly tell the server we are leaving to stop the [Errno 9] spam
+                    if (typeof socket !== 'undefined' && socket && socket.connected) {
+                        socket.disconnect(); 
+                    }
+                    
+                    // Wait 150ms for the disconnect packet to send, then refresh
+                    setTimeout(() => {
+                        window.location.reload(); 
+                    }, 150);
+                }
             }, 2000);
         }
     });
