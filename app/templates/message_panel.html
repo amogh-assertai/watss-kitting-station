@@ -5,6 +5,14 @@
         <div class="card-header bg-danger text-white p-3">
             <h4 class="mb-0"><i class="fas fa-bullhorn me-2"></i> SOP Broadcast Admin</h4>
         </div>
+
+        <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center p-3">
+            <h4 class="mb-0"><i class="fas fa-bullhorn me-2"></i> Message Center</h4>
+            <a href="{{ url_for('message_center.message_history') }}" class="btn btn-sm btn-outline-light">
+                <i class="fas fa-history"></i> View History
+            </a>
+        </div>
+
         <div class="card-body p-4">
             <div class="mb-3">
                 <label class="fw-bold">Intervention Message</label>
@@ -36,7 +44,8 @@ async function sendAlert() {
         password: document.getElementById('pass').value
     };
 
-    const res = await fetch('/sop/broadcast', {
+
+    const res = await fetch('/message_center/broadcast', { // Changed from /sop/broadcast
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(data)
