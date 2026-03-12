@@ -17,6 +17,12 @@ def verify_admin():
         return jsonify({"status": "success"})
     return jsonify({"status": "error"}), 401
 
+@msg_bp.route('/panel')
+def message_panel():
+    if not session.get('is_admin'):
+        return redirect(url_for('home.index'))
+    return render_template('message_panel.html')
+
 @msg_bp.route('/broadcast', methods=['POST'])
 def broadcast():
     if not session.get('is_admin'): return jsonify({"status": "unauthorized"}), 403
