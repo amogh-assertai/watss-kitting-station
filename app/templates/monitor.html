@@ -339,6 +339,24 @@
         transition: transform 0.2s, box-shadow 0.2s;
         border: 2px solid transparent;
         color: white;
+        position: relative; /* REQUIRED FOR THE BADGE */
+    }
+
+    /* THE NEW BADGE CSS */
+    .kit-error-indicator {
+        position: absolute;
+        top: -5px;
+        right: -8px;
+        background-color: #212529; /* Dark grey so it stands out against red/green */
+        color: white;
+        font-size: 0.65rem;
+        font-weight: 800;
+        padding: 2px 6px;
+        border-radius: 12px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        z-index: 10;
+        line-height: 1;
+        text-transform: lowercase;
     }
 
     .kit-cell:hover {
@@ -888,6 +906,8 @@
     // --- ADDED: SYSTEM LOCK FLAG ---
     let isSystemLocked = false; 
 
+    let isHistoryOpen = false; // <--- NEW: Track if history modal is open
+
     function resetOverlays() {
         stopAlarm(); // <--- STOP SOUND
         if (timers.cam1) { clearTimeout(timers.cam1); timers.cam1 = null; }
@@ -968,6 +988,14 @@
     socket.on('connect', () => { socket.emit('join_table', { table_id: TABLE_ID }); });
 
     socket.on('ui_update', (data) => {
+
+        // --- NEW: BLOCK DISTURBANCES IF HISTORY IS OPEN ---
+        if (isHistoryOpen) {
+            console.log("History is open. Ignoring background UI update to not disturb operator.");
+            return; 
+        }
+
+
         if (data.type === 'error_resolved') {
             resetOverlays(); window.location.reload(); return;
         }
@@ -1163,6 +1191,15 @@
                     const div = document.createElement('div');
                     div.className = `kit-cell kit-${kit.color}`;
                     div.innerText = kit.kit_number;
+                    
+                    // --- NEW: Add the error label badge if it exists ---
+                    if (kit.label) {
+                        const badge = document.createElement('span');
+                        badge.className = 'kit-error-indicator';
+                        badge.innerText = kit.label;
+                        div.appendChild(badge);
+                    }
+                    
                     if (kit.state === 'completed') div.onclick = () => loadKitDetails(kit.kit_number);
                     else div.style.cursor = 'default';
                     container.appendChild(div);
@@ -1248,6 +1285,24 @@
             }
         } catch (e) { console.error("Error loading kit details:", e); alert("Failed to load history details."); }
     }
+
+    // --- NEW: TRACK HISTORY MODAL STATE ---
+    document.addEventListener('DOMContentLoaded', function() {
+        const historyModalEl = document.getElementById('historyGridModal');
+        if (historyModalEl) {
+            // Set lock to true when modal opens
+            historyModalEl.addEventListener('show.bs.modal', () => { 
+                isHistoryOpen = true; 
+            });
+            
+            // Sync up with the database when the modal closes
+            historyModalEl.addEventListener('hidden.bs.modal', () => {
+                isHistoryOpen = false;
+                console.log("History closed. Reloading to sync with background AI activity...");
+                window.location.reload();
+            });
+        }
+    });
 
     (function checkInitialState() {
         console.log("🔄 Checking initial state from DB...");

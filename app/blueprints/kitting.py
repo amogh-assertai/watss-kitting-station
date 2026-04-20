@@ -992,36 +992,67 @@ def get_history_summary(activity_id, cam_id):
     try:
         activity = db.activities.find_one({"_id": ObjectId(activity_id)})
         if not activity: return jsonify({"status": "error"}), 404
+        
         total_kits = activity.get('total_kits_to_pack', 1)
         current_idx = activity.get(f'current_kit_index_{cam_id}', 1)
         history_cursor = db.kit_history.find({
             "activity_id": ObjectId(activity_id),
             "camera_id": cam_id
         }).sort("kit_number", 1)
+        
         summary_map = {}
         for record in history_cursor:
             status = 'green'
-            if record.get('errors_snapshot'): status = 'red'
+            errors = record.get('errors_snapshot', [])
+            s_count = 0
+            p_count = 0
+            
+            if errors: 
+                status = 'red'
+                # Count the types of errors
+                for err in errors:
+                    reason = str(err.get('reason_selected', '')).lower()
+                    if 'system' in reason:
+                        s_count += 1
+                    elif 'process' in reason:
+                        p_count += 1
             else:
                 for part in record.get('components_snapshot', []):
                     if part['found_quantity'] == 0: status = 'red'; break
                     if part['found_quantity'] != part['quantity']: status = 'yellow'
-            summary_map[record['kit_number']] = status
+            
+            # Generate the label string (e.g., "s", "s+1", "p", "p+1", "s,p")
+            s_label = f"s+{s_count-1}" if s_count > 1 else "s" if s_count == 1 else ""
+            p_label = f"p+{p_count-1}" if p_count > 1 else "p" if p_count == 1 else ""
+            parts = [l for l in [s_label, p_label] if l]
+            label = ",".join(parts)
+            
+            summary_map[record['kit_number']] = {
+                "color": status,
+                "label": label
+            }
+            
         grid_data = []
         for i in range(1, total_kits + 1):
             item = {"kit_number": i}
             if i < current_idx:
                 item["state"] = "completed"
-                item["color"] = summary_map.get(i, "grey")
+                mapped = summary_map.get(i, {"color": "grey", "label": ""})
+                item["color"] = mapped["color"]
+                item["label"] = mapped["label"]
             elif i == current_idx:
                 item["state"] = "in_progress"
                 item["color"] = "blue"
+                item["label"] = ""
             else:
                 item["state"] = "pending"
                 item["color"] = "grey"
+                item["label"] = ""
             grid_data.append(item)
+            
         return jsonify({"status": "success", "grid": grid_data})
-    except Exception as e: return jsonify({"status": "error", "message": str(e)}), 500
+    except Exception as e: 
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # --- HISTORY DETAILS API (Updated to include Validation Image) ---
 @kitting_bp.route('/api/history/<activity_id>/<cam_id>/<int:kit_number>')
